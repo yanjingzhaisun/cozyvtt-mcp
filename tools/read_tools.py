@@ -1,0 +1,105 @@
+"""只读工具：campaign_status / chat_read / events_poll / map_list /
+initiative_state / character_list / character_get / creature_search"""
+from __future__ import annotations
+
+from tools import wrap
+
+
+def register(mcp, get_ctx) -> None:
+
+    @mcp.tool
+    @wrap
+    def campaign_status() -> dict:
+        """实例健康 + 战役状态 + 当前地图。健康检查用 GET /health（200 即活）。"""
+        ctx = get_ctx()
+        health = {"reachable": False}
+        try:
+            h = ctx.client.get("/health")
+            health = {"reachable": True, "detail": h if isinstance(h, dict) else {}}
+        except Exception:
+            # /health 可能被前端 SPA 兜底接管；能拿到 200 就算活
+            try:
+                ctx.client.get("/api/auth/ping")
+                health = {"reachable": True, "detail": {"via": "/api/auth/ping"}}
+            except Exception as e2:
+                health = {"reachable": False, "error": str(e2)}
+        camp = ctx.client.get(f"/api/campaigns/{ctx.campaign_id}").get("campaign", {})
+        current_map = None
+        if camp.get("currentMapId"):
+            try:
+                maps = ctx.client.get(f"/api/campaigns/{ctx.campaign_id}/maps").get("maps", [])
+                current_map = next((m for m in maps if m.get("id") == camp["currentMapId"]), None)
+            except Exception:
+                pass
+        return {
+            "health": health,
+            "campaign": {k: camp.get(k) for k in
+                         ("id", "name", "status", "gameSystem", "currentMapId", "description")},
+            "current_map": current_map and {k: current_map.get(k) for k in ("id", "name", "width", "height")},
+            "me": ctx.auth.user,
+        }
+
+    @mcp.tool
+    @wrap
+    def chat_read(limit: int = 20, offset: int = 0) -> dict:
+        """翻聊天记录（注意：DICE_ROLL 类不入聊天史，骰史看 events_poll）。"""
+        ctx = get_ctx()
+        return ctx.client.get(
+            f"/api/campaigns/{ctx.campaign_id}/messages",
+            params={"limit": min(limit, 100), "offset": offset})
+
+    @mcp.tool
+    @wrap
+    def events_poll(since: int = 0, limit: int = 100) -> dict:
+        """拉取 seq > since 的实时事件（玩家发言/骰子/移动），含骰史。
+        返回 {events, latest_seq}；把 latest_seq 存下当下次的 since 即可增量拉。"""
+        ctx = get_ctx()
+        ctx.ensure_ws()
+        return ctx.ws.poll(since=since, limit=limit)
+
+    @mcp.tool
+    @wrap
+    def map_list() -> dict:
+        """地图列表。"""
+        ctx = get_ctx()
+        return ctx.client.get(f"/api/campaigns/{ctx.campaign_id}/maps")
+
+    @mcp.tool
+    @wrap
+    def initiative_state() -> dict:
+        """查先攻（最近一条 initiative.state 广播；无则提示尚未开战）。"""
+        ctx = get_ctx()
+        ctx.ensure_ws()
+        rec = ctx.ws.latest("initiative.state")
+        if not rec:
+            return {"state": None, "note": "缓冲中尚无 initiative.state（可能未开战或 WS 未收到）"}
+        return {"state": rec["payload"], "seq": rec["seq"], "ts": rec["ts"]}
+
+    @mcp.tool
+    @wrap
+    def character_list() -> dict:
+        """角色列表（战役 roster）。"""
+        ctx = get_ctx()
+        return ctx.client.get(f"/api/campaigns/{ctx.campaign_id}/characters")
+
+    @mcp.tool
+    @wrap
+    def character_get(character_id: str) -> dict:
+        """读角色卡全量（CoC7e）。"""
+        ctx = get_ctx()
+        return ctx.client.get(f"/api/characters/{character_id}")
+
+    @mcp.tool
+    @wrap
+    def creature_search(search: str = "", source: str = "", cr: str = "",
+                        limit: int = 20, offset: int = 0) -> dict:
+        """Open5e SRD + 战役自定义怪库检索。source: srd|custom。"""
+        ctx = get_ctx()
+        params = {"limit": min(limit, 100), "offset": offset}
+        if search:
+            params["search"] = search
+        if source:
+            params["source"] = source
+        if cr:
+            params["cr"] = cr
+        return ctx.client.get(f"/api/campaigns/{ctx.campaign_id}/creatures", params=params)

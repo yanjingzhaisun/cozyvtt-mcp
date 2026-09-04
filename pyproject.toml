@@ -1,0 +1,20 @@
+[project]
+name = "cozyvtt-mcp"
+version = "0.1.0"
+description = "MCP bridge for CozyVTT: let an AI agent drive a campaign as DM/KP"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=2.0",
+    "requests>=2.31",
+    "python-socketio[client]>=5.11",
+    "websocket-client>=1.7",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "responses>=0.25",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
