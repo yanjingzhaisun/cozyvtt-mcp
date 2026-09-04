@@ -126,3 +126,7 @@ MIT (see [LICENSE](LICENSE)). CozyVTT itself is AGPLv3 — this project is an in
 
 - CozyVTT upstream: https://github.com/CheekyChinchilla/CozyVTT
 - AI-integration discussion: https://github.com/CheekyChinchilla/CozyVTT/issues/32
+
+## Ecosystem
+
+- [dnd5e-rules](https://github.com/yanjingzhaisun/dnd5e-rules) — deterministic D&D 5e rules calculations (pure functions, SRD 5.1 data under CC-BY-4.0). The rules layer we pair with this bridge: the server rolls the dice, the bridge carries them, this library does the math, the agent narrates.
