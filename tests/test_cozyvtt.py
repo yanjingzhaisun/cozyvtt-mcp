@@ -207,16 +207,19 @@ class FakeMCP:
 
 
 class StubClient:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, system=None):
         self.fail = fail
+        self.system = system
         self.calls = []
 
     def get(self, path, **kw):
         self.calls.append(("GET", path, kw))
         if self.fail:
             raise ApiError(500, "boom")
-        return {"campaign": {"id": CID, "name": "阿卡姆夜话", "status": "PREPARATION"},
-                "messages": [], "maps": [], "roster": [], "creatures": []}
+        return {"campaign": {"id": CID, "name": "阿卡姆夜话", "status": "PREPARATION",
+                             "gameSystem": self.system},
+                "messages": [], "maps": [], "roster": [], "creatures": [],
+                "isValid": True}
 
     def post(self, path, payload=None, **kw):
         self.calls.append(("POST", path, payload))
@@ -329,3 +332,77 @@ def test_token_move_uses_rest_put():
     assert r["ok"] is True
     assert ("PUT", f"/api/campaigns/{CID}/maps/m1/tokens/t1",
             {"position": {"x": 3, "y": 4}}) in client.calls
+
+
+# ---- 系统门控（gameSystem 枚举裁剪工具面）----
+
+def test_initiative_roll_gated_on_coc():
+    tools = build_tools(make_ctx(client=StubClient(system="CALL_OF_CTHULHU_7E")))
+    r = tools["initiative_manage"](action="roll", token_id="t1", map_id="m1")
+    assert r["ok"] is False and "DND_5E" in r["error"]
+
+
+def test_initiative_roll_allowed_on_5e():
+    ws = StubWS()
+    tools = build_tools(make_ctx(client=StubClient(system="DND_5E"), ws=ws))
+    r = tools["initiative_manage"](action="roll", token_id="t1", map_id="m1",
+                                   expression="1d20+3")
+    assert r["ok"] is True
+    assert ("initiative.roll", {"tokenId": "t1", "mapId": "m1",
+                                "expression": "1d20+3"}) in ws.emitted
+
+
+def test_initiative_roll_rejected_when_system_unset():
+    tools = build_tools(make_ctx())  # StubClient 默认 gameSystem=None（flexible）
+    r = tools["initiative_manage"](action="roll", token_id="t1", map_id="m1")
+    assert r["ok"] is False and "未设置" in r["error"]
+
+
+def test_initiative_set_and_reorder():
+    ws = StubWS()
+    tools = build_tools(make_ctx(ws=ws))
+    assert tools["initiative_manage"](action="set", token_id="t1")["ok"] is False  # 缺 value
+    r = tools["initiative_manage"](action="set", token_id="t1", map_id="m1", value=15)
+    assert r["ok"] is True
+    assert ("initiative.set", {"tokenId": "t1", "mapId": "m1", "value": 15}) in ws.emitted
+    assert tools["initiative_manage"](action="reorder")["ok"] is False  # 缺列表
+    r = tools["initiative_manage"](action="reorder", ordered_token_ids=["t2", "t1"])
+    assert r["ok"] is True
+    assert ("initiative.reorder", {"orderedTokenIds": ["t2", "t1"]}) in ws.emitted
+
+
+def test_creature_search_srd_gated_on_coc():
+    tools = build_tools(make_ctx(client=StubClient(system="CALL_OF_CTHULHU_7E")))
+    r = tools["creature_search"](search="goblin", source="srd")
+    assert r["ok"] is False and "5e" in r["error"]
+
+
+def test_creature_search_srd_allowed_on_5e_and_custom_open():
+    client = StubClient(system="DND_5E")
+    tools = build_tools(make_ctx(client=client))
+    assert tools["creature_search"](search="goblin", source="srd")["ok"] is True
+    # custom 源不限系统（CoC 战役自建怪库）
+    tools_coc = build_tools(make_ctx(client=StubClient(system="CALL_OF_CTHULHU_7E")))
+    assert tools_coc["creature_search"](search="深潜者", source="custom")["ok"] is True
+
+
+def test_campaign_status_features_surface():
+    tools = build_tools(make_ctx(client=StubClient(system="DND_5E")))
+    f = tools["campaign_status"]()["data"]["features"]
+    assert f["srd_creature_library"] is True and f["initiative_roll"] is True
+    tools = build_tools(make_ctx(client=StubClient(system="CALL_OF_CTHULHU_7E")))
+    f = tools["campaign_status"]()["data"]["features"]
+    assert f["srd_creature_library"] is False and f["initiative_roll"] is False
+
+
+def test_character_create_and_validate():
+    client = StubClient(system="CALL_OF_CTHULHU_7E")
+    tools = build_tools(make_ctx(client=client))
+    r = tools["character_create"](name="调查员甲", data={"occupation": "医生"})
+    assert r["ok"] is True
+    assert ("POST", "/api/characters",
+            {"name": "调查员甲", "campaignId": CID,
+             "data": {"occupation": "医生"}}) in client.calls
+    r = tools["character_validate"](character_id="c1")
+    assert r["ok"] is True
+    assert ("GET", "/api/characters/c1/validate", {}) in client.calls

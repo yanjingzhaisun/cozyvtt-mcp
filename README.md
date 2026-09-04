@@ -14,14 +14,25 @@ Built for and tested with [Hermes Agent](https://github.com/NousResearch/hermes-
 
 ## Features
 
-18 tools, all returning a uniform `{ok, data, error}` shape (exceptions never escape the MCP layer):
+20 tools, all returning a uniform `{ok, data, error}` shape (exceptions never escape the MCP layer):
 
-- **Session/campaign**: `campaign_status`, `session_manage`, `map_list`, `map_switch`
+- **Session/campaign**: `campaign_status` (incl. per-system feature surface), `session_manage`, `map_list`, `map_switch`
 - **Narration**: `chat_send` (DM / PLAYER), `chat_read`
 - **Dice**: `dice_roll` (server-side true random; `isSecret=true` for DM-only rolls, auditable via server logs), `events_poll` (incl. dice history — DICE_ROLL events are *not* in chat history)
 - **Tokens/maps**: `token_add`, `token_move`, `token_hp`, `token_place_creature`, `creature_search` (SRD + custom library)
-- **Combat**: `initiative_manage`, `initiative_state` (note: CoC7e initiative is DEX-ordered, no roll — this is upstream rules behavior)
-- **Characters**: `character_list`, `character_get`, `character_update` (rules math is done by the agent; the bridge just writes values)
+- **Combat**: `initiative_manage` (add / remove / **roll** / **set** / **reorder** / start / next / end), `initiative_state` (note: CoC7e initiative is DEX-ordered, no roll — this is upstream rules behavior, and `roll` is gated accordingly)
+- **Characters**: `character_list`, `character_get`, `character_create`, `character_validate`, `character_update` (rules math is done by the agent; the bridge just writes values)
+
+## System gating
+
+The bridge stays game-system agnostic, but a few capabilities only make sense under a specific rule system. Those are gated against the campaign's `gameSystem` (fetched once, cached; enum: `DND_5E` / `PATHFINDER_2E` / `SHADOWRUN_6E` / `CALL_OF_CTHULHU_7E`):
+
+| Capability | Allowed systems | Why |
+|---|---|---|
+| `creature_search source=srd` | `DND_5E` | The SRD library is seeded from Open5e — a D&D 5e data source |
+| `initiative_manage action=roll` | `DND_5E`, `PATHFINDER_2E`, `SHADOWRUN_6E` | The server derives the initiative dice per system; CoC7e doesn't roll at all (DEX order) |
+
+Gated calls return a clear `{ok: false, error}` explaining which systems are allowed, instead of emitting an event the server would ignore or misinterpret. Campaigns with no `gameSystem` set (flexible) fail closed. `campaign_status().features` reports the current campaign's available gated capabilities.
 
 ## Architecture
 

@@ -14,6 +14,27 @@ log = logging.getLogger("cozyvtt.tools")
 
 DICE_MIN_INTERVAL = 2.1  # 骰子 WS 限流 30/min → 客户端最小间隔 2.1s
 
+# 上游 GameSystem 枚举（backend/prisma/schema.prisma）
+SYSTEM_DND5E = "DND_5E"
+SYSTEM_PF2E = "PATHFINDER_2E"
+SYSTEM_SR6 = "SHADOWRUN_6E"
+SYSTEM_COC7E = "CALL_OF_CTHULHU_7E"
+KNOWN_SYSTEMS = (SYSTEM_DND5E, SYSTEM_PF2E, SYSTEM_SR6, SYSTEM_COC7E)
+# 服务器端 initiative.roll 有实际骰子行为的系统（CoC7e 不骰，DEX 排序）
+INITIATIVE_ROLL_SYSTEMS = (SYSTEM_DND5E, SYSTEM_PF2E, SYSTEM_SR6)
+
+_SYSTEM_UNSET = object()  # get_system 缓存哨兵（None 也是合法值：flexible 战役）
+
+
+def require_system(ctx, allowed: tuple, feature: str) -> None:
+    """系统门：当前战役 gameSystem 不在 allowed 内时抛 ValueError（经 wrap 变 {ok:False}）。
+    战役未设置 gameSystem（flexible）同样不通过——门控特性依赖系统语义。"""
+    system = ctx.get_system()
+    if system not in allowed:
+        raise ValueError(
+            f"{feature} 仅对 {'/'.join(allowed)} 战役开放，"
+            f"当前战役系统：{system or '未设置(flexible)'}")
+
 
 class Ctx:
     """工具共享上下文：REST client + auth + WS listener + 战役 id。"""
@@ -42,6 +63,15 @@ class Ctx:
         client = CozyClient(base_url, auth)
         ws = WSListener(base_url, campaign_id, auth.cookie_header)
         return cls(client, auth, ws, campaign_id)
+
+    # ---- 战役规则系统（懒取 + 缓存；None = 未设置 flexible）----
+
+    def get_system(self):
+        if getattr(self, "_system", _SYSTEM_UNSET) is _SYSTEM_UNSET:
+            camp = self.client.get(f"/api/campaigns/{self.campaign_id}").get("campaign", {})
+            self._system = camp.get("gameSystem")
+            log.info("战役规则系统：%s", self._system or "未设置(flexible)")
+        return self._system
 
     # ---- WS 懒启动 ----
 
