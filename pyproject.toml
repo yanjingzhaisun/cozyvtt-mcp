@@ -1,6 +1,6 @@
 [project]
 name = "cozyvtt-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP bridge for CozyVTT: let an AI agent drive a campaign as DM/KP"
 requires-python = ">=3.11"
 dependencies = [
