@@ -8,7 +8,7 @@ Built for and tested with [Hermes Agent](https://github.com/NousResearch/hermes-
 
 | cozyvtt-mcp | CozyVTT | Notes |
 |---|---|---|
-| 0.1.0 | **v1.2.2** | Developed and smoke-tested against v1.2.2 |
+| 0.1.1 | **v1.2.2** | Critical-bugfix patch following Codex review; still pinned to CozyVTT v1.2.2 |
 
 > **API stability warning.** The CozyVTT author has stated the REST/WS API is *subject to change* — v1.3.0 ships a large amount of changes (see [CozyVTT#32](https://github.com/CheekyChinchilla/CozyVTT/issues/32)). There are no compatibility promises yet. This bridge tracks the upstream changelog and pins its compatibility table per release. If your instance runs a newer CozyVTT, expect to adjust.
 
