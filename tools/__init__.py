@@ -48,6 +48,7 @@ class Ctx:
         self._ws_lock = threading.Lock()
         self._dice_lock = threading.Lock()
         self._last_dice_ts = 0.0
+        self._character_lock = threading.Lock()
 
     @classmethod
     def from_env(cls) -> "Ctx":
@@ -61,7 +62,7 @@ class Ctx:
             raise RuntimeError("缺少 COZYVTT_CAMPAIGN_ID 环境变量")
         auth = AuthManager(base_url, email, password)
         client = CozyClient(base_url, auth)
-        ws = WSListener(base_url, campaign_id, auth.cookie_header)
+        ws = WSListener(base_url, campaign_id, auth.cookie_header, auth_refresh=auth.relogin)
         return cls(client, auth, ws, campaign_id)
 
     # ---- 战役规则系统（懒取 + 缓存；None = 未设置 flexible）----
@@ -77,19 +78,34 @@ class Ctx:
 
     def ensure_ws(self) -> None:
         with self._ws_lock:
-            if self._ws_started:
-                return
-            self.ws.start()
-            self._ws_started = True
+            self._ws_started = self.ws.connected and self.ws.authenticated
+            if not self._ws_started:
+                self.ws.start()
+                self._ws_started = self.ws.connected and self.ws.authenticated
+
+    def close(self) -> None:
+        try:
+            self.ws.stop()
+        finally:
+            self.auth.stop()
 
     # ---- 骰子节流（排队，不报错）----
 
-    def dice_throttle(self) -> None:
+    def send_dice(self, payload: dict) -> dict:
         with self._dice_lock:
-            wait = DICE_MIN_INTERVAL - (time.time() - self._last_dice_ts)
+            wait = DICE_MIN_INTERVAL - (time.monotonic() - self._last_dice_ts)
             if wait > 0:
                 time.sleep(wait)
-            self._last_dice_ts = time.time()
+            result = self.ws.emit("dice.roll", payload)
+            self._last_dice_ts = time.monotonic()
+            return result
+
+
+class PartialFailure(Exception):
+    """上游已产生副作用，附带恢复所需信息，避免调用方重复创建。"""
+    def __init__(self, message: str, data: dict):
+        super().__init__(message)
+        self.data = data
 
 
 def _ok(data=None):
@@ -101,7 +117,7 @@ def _err(msg: str):
 
 
 def wrap(fn):
-    """统一异常 → {ok,error}，绝不抛出 MCP 层。
+    """函数体异常 → {ok,error}；调用前的参数 schema 校验由 FastMCP 处理。
     functools.wraps 保留原签名（FastMCP 需要解析参数 schema）。"""
     import functools
     from client import ApiError
@@ -110,6 +126,8 @@ def wrap(fn):
     def inner(*args, **kwargs):
         try:
             return _ok(fn(*args, **kwargs))
+        except PartialFailure as e:
+            return {"ok": False, "error": str(e), "data": e.data}
         except ApiError as e:
             return _err(f"HTTP {e.status}: {e.message}" if e.status else e.message)
         except Exception as e:

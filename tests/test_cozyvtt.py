@@ -30,11 +30,12 @@ class FakeSIO:
 
     def connect(self, url, headers=None, wait_timeout=None):
         self.connected = True
-        self.connect_headers = headers
+        self.connect_headers = headers() if callable(headers) else headers
         self.handlers["connect"]()
 
     def disconnect(self):
         self.connected = False
+        self.handlers["disconnect"]("server disconnect")
 
     # 测试辅助：模拟服务端推送 / 重连
     def push(self, event, data):
@@ -91,7 +92,7 @@ def test_relogin_min_interval_skip():
     am.login()
     assert am.relogin() is False           # 距上次 <180s → 跳过
     assert len(resp_lib.calls) == 1        # 没有第二次登录请求
-    am._last_login_ts -= 400               # 模拟过了 400s
+    am._next_login_ts -= 400               # 模拟过了 400s
     resp_lib.add(resp_lib.POST, f"{BASE}/api/auth/login", json={"user": {}}, status=200)
     assert am.relogin() is True
     assert len(resp_lib.calls) == 2
@@ -137,7 +138,7 @@ def test_client_error_contains_upstream_message():
 
 def make_ws():
     ws = WSListener(BASE, CID, cookie_getter=lambda: "sid=abc", capacity=5, sio_factory=FakeSIO)
-    ws.start()
+    ws.sio.connect(BASE, headers=lambda: {"Cookie": ws._cookie_getter()})
     return ws
 
 
@@ -175,15 +176,14 @@ def test_ws_ring_capacity_trim():
     assert out["latest_seq"] == 8
 
 
-def test_ws_reconnect_marks_system_event():
+def test_ws_reconnect_marks_system_event_only_after_authentication():
     ws = make_ws()
+    ws._ever_authenticated = True
     ws.sio.push("connected", {"userId": "u1"})
-    ws.sio.simulate_reconnect()
-    out = ws.poll(since=0)
-    assert any(e["event"] == "system.reconnected" for e in out["events"])
-    # 重连后服务端会再发 'connected'，随之重新 authenticate
-    ws.sio.push("connected", {"userId": "u1"})
-    assert ws.sio.emitted.count(("authenticate", {"campaignId": CID})) == 2
+    assert not ws.poll()["events"]
+    ws.sio.push("authenticated", {"campaignId": CID, "role": "DM"})
+    assert ws.poll()["events"][0]["event"] == "system.reconnected"
+    assert ("initiative.request_state", {}) in ws.sio.emitted
 
 
 def test_ws_latest():
@@ -216,14 +216,28 @@ class StubClient:
         self.calls.append(("GET", path, kw))
         if self.fail:
             raise ApiError(500, "boom")
-        return {"campaign": {"id": CID, "name": "阿卡姆夜话", "status": "PREPARATION",
-                             "gameSystem": self.system},
-                "messages": [], "maps": [], "roster": [], "creatures": [],
-                "isValid": True}
+        if path == "/health":
+            return {"status": "ok"}
+        if path == f"/api/campaigns/{CID}":
+            return {"campaign": {"id": CID, "name": "阿卡姆夜话", "status": "PREPARATION",
+                                 "gameSystem": self.system, "activeSession": {"id": "session-1"}}}
+        for suffix, key in (("messages", "messages"), ("maps", "maps"),
+                            ("characters", "roster"), ("creatures", "creatures")):
+            if path == f"/api/campaigns/{CID}/{suffix}":
+                return {key: []}
+        if path == "/api/characters/c1/validate":
+            return {"isValid": True}
+        raise AssertionError(f"未定义的 GET 契约: {path}")
 
     def post(self, path, payload=None, **kw):
         self.calls.append(("POST", path, payload))
-        return {"message": "ok"}
+        if path == "/api/characters":
+            return {"character": {"id": "c1", **payload}}
+        if path == "/api/characters/c1/assign":
+            return {"character": {"id": "c1", "campaignId": payload["campaignId"]}}
+        if path == f"/api/campaigns/{CID}/sessions":
+            return {"session": {"id": "session-1"}}
+        raise AssertionError(f"未定义的 POST 契约: {path}")
 
     def put(self, path, payload=None, **kw):
         self.calls.append(("PUT", path, payload))
@@ -231,6 +245,9 @@ class StubClient:
 
 
 class StubWS:
+    connected = True
+    authenticated = True
+
     def __init__(self):
         self.emitted = []
 
@@ -239,6 +256,7 @@ class StubWS:
 
     def emit(self, event, payload):
         self.emitted.append((event, payload))
+        return {"sent": True, "confirmed": False, "status": "pending", "since": 0}
 
     def poll(self, since=0, limit=100):
         return {"events": [], "latest_seq": 0}
@@ -248,7 +266,7 @@ class StubWS:
 
 
 class StubAuth:
-    user = {"email": "dm@x.local"}
+    user = {"id": "u1", "email": "dm@x.local"}
 
     def cookie_header(self):
         return "sid=x"
@@ -256,17 +274,7 @@ class StubAuth:
 
 def make_ctx(client=None, ws=None):
     from tools import Ctx
-    ctx = Ctx.__new__(Ctx)
-    ctx.client = client or StubClient()
-    ctx.auth = StubAuth()
-    ctx.ws = ws or StubWS()
-    ctx.campaign_id = CID
-    ctx._ws_started = True
-    import threading
-    ctx._ws_lock = threading.Lock()
-    ctx._dice_lock = threading.Lock()
-    ctx._last_dice_ts = 0.0
-    return ctx
+    return Ctx(client or StubClient(), StubAuth(), ws or StubWS(), CID)
 
 
 def build_tools(ctx):
@@ -292,15 +300,16 @@ def test_tools_error_structure_never_raises():
     assert "HTTP 500" in r["error"] and "boom" in r["error"]
 
 
-def test_chat_send_and_session_ws_emit():
+def test_chat_send_and_session_rest():
     ws = StubWS()
     tools = build_tools(make_ctx(ws=ws))
-    r = tools["chat_send"](content="夜幕降临", type="NARRATION")
+    r = tools["chat_send"](content="夜幕降临", type="DM")
     assert r["ok"] is True
-    assert ("chat.message", {"content": "夜幕降临", "type": "NARRATION"}) in ws.emitted
+    assert ("chat.message", {"content": "夜幕降临", "type": "DM"}) in ws.emitted
     r = tools["session_manage"](action="start")
     assert r["ok"] is True
-    assert ("session.start", {}) in ws.emitted
+    assert r["data"]["session"]["id"] == "session-1"
+    assert not any(e.startswith("session.") for e, _ in ws.emitted)
     r = tools["session_manage"](action="bogus")
     assert r["ok"] is False and "action" in r["error"]
 
@@ -314,8 +323,8 @@ def test_dice_roll_throttle_queues():
     tools["dice_roll"](expression="2d6", is_secret=True)
     elapsed = time.time() - t0
     assert elapsed >= tools_pkg.DICE_MIN_INTERVAL  # 第二次排队等待
-    assert ctx.ws.emitted[0] == ("dice.roll", {"expression": "1d20", "isSecret": False})
-    assert ctx.ws.emitted[1] == ("dice.roll", {"expression": "2d6", "isSecret": True})
+    assert ctx.ws.emitted[0] == ("dice.roll", {"expression": "1d20", "secret": False})
+    assert ctx.ws.emitted[1] == ("dice.roll", {"expression": "2d6", "secret": True})
 
 
 def test_initiative_manage_validation():

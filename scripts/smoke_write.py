@@ -1,89 +1,89 @@
 #!/usr/bin/env python3
-"""写操作冒烟（主人手动执行）：chat_send + dice_roll + events_poll 验证能读到自己的骰子。
-
-⚠️ 会向测试战役写入聊天与骰子记录。只对测试战役运行。
-用法同 smoke.py，需 COZYVTT_SMOKE=1。
-"""
+"""手动写冒烟：独立测试战役、COZYVTT_SMOKE=1；验证聊天及公骰/暗骰广播。"""
 import os
 import sys
 import time
 from pathlib import Path
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from auth import AuthManager
-from client import CozyClient
 from tools import Ctx, register_all
-from ws_listener import WSListener
+from scripts.smoke import FakeMCP
 
 
-class FakeMCP:
-    def __init__(self):
-        self.tools = {}
+def matches_roll(payload, user_id, purpose, expression, secret):
+    """按上游 1.2.2 广播字段匹配，避免把别人的相同骰式当成自己的结果。"""
+    return (isinstance(payload, dict) and bool(payload.get("id"))
+            and payload.get("userId") == user_id and payload.get("purpose") == purpose
+            and payload.get("expression") == expression and payload.get("secret") is secret)
 
-    def tool(self, fn):
-        self.tools[fn.__name__] = fn
-        return fn
+
+def run_checks(ctx) -> int:
+    ctx.ensure_ws()
+    user_id = (ctx.auth.user or {}).get("id")
+    if not user_id:
+        raise RuntimeError("登录响应没有 user.id，无法验证广播归属")
+    mcp = FakeMCP()
+    register_all(mcp, lambda: ctx)
+    tools = mcp.tools
+    marker = f"smoke-{uuid4()}"
+    cursor = ctx.ws.poll()["high_water_seq"]
+    chat = tools["chat_send"](content=f"[冒烟] {marker}", type="DM")
+    rolls = {}
+    for secret in (False, True):
+        purpose = f"{marker}-{secret}"
+        rolls[secret] = tools["dice_roll"]("1d20+3", is_secret=secret, purpose=purpose)
+    if not chat["ok"] or not all(r["ok"] for r in rolls.values()):
+        print("发送失败:", chat, rolls)
+        return 1
+    print("聊天、公骰、暗骰已发送，等待业务广播确认（pending）")
+    found_chat = False
+    found_rolls = set()
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        out = tools["events_poll"](since=cursor, limit=200)
+        if not out["ok"]:
+            print("轮询失败:", out)
+            return 1
+        batch = out["data"]
+        if batch["gap"] or batch["cursor_reset"]:
+            print("事件存在缺口，无法证明本次冒烟成功")
+            return 1
+        cursor = batch["next_seq"]
+        for event in batch["events"]:
+            payload = event["payload"]
+            if event["event"] == "system.error":
+                print("WS 错误:", payload)
+                return 1
+            if (event["event"] == "chat.message" and isinstance(payload, dict)
+                    and payload.get("userId") == user_id
+                    and payload.get("content") == f"[冒烟] {marker}"):
+                found_chat = True
+            if event["event"] == "dice.rolled":
+                for secret in (False, True):
+                    if matches_roll(payload, user_id, f"{marker}-{secret}", "1d20+3", secret):
+                        found_rolls.add(secret)
+        if found_chat and len(found_rolls) == 2:
+            print("PASS：收到自己的聊天、公骰和标记为 secret 的暗骰")
+            # TODO(#25): 单个 DM 连接不能证明玩家未收到暗骰；端到端隐私验收
+            # 需要独立 PLAYER 账号/连接。离线契约测试验证 secret 字段与广播分支。
+            return 0
+        time.sleep(0.1)
+    print("FAIL：未完整收到自己的聊天、公骰和暗骰")
+    return 1
 
 
 def main() -> int:
     if os.environ.get("COZYVTT_SMOKE") != "1":
-        print("需要 COZYVTT_SMOKE=1 显式开启")
+        print("需要 COZYVTT_SMOKE=1 显式开启，只用于测试战役")
         return 2
-
-    base = os.environ["COZYVTT_URL"]
-    auth = AuthManager(base, os.environ["COZYVTT_EMAIL"], os.environ["COZYVTT_PASSWORD"])
-    cid = os.environ["COZYVTT_CAMPAIGN_ID"]
-    auth.login()  # 只登录一次
-    print("[login] ok")
-
-    ctx = Ctx(CozyClient(base, auth), auth, WSListener(base, cid, auth.cookie_header), cid)
-    ctx.ensure_ws()
-    # 等 authenticate 完成
-    for _ in range(30):
-        if ctx.ws.authenticated:
-            break
-        time.sleep(0.2)
-    print(f"[ws] connected={ctx.ws.connected} authenticated={ctx.ws.authenticated}")
-
-    mcp = FakeMCP()
-    register_all(mcp, lambda: ctx)
-    tools = mcp.tools
-
-    failed = 0
-    marker = f"smoke-{int(time.time())}"
-
-    r = tools["chat_send"](content=f"[冒烟] {marker}", type="DM")
-    print(f"[chat_send] {'PASS' if r.get('ok') else 'FAIL ' + str(r.get('error'))}")
-    failed += 0 if r.get("ok") else 1
-
-    r = tools["dice_roll"](expression="1d20+3", is_secret=False)
-    print(f"[dice_roll] {'PASS' if r.get('ok') else 'FAIL ' + str(r.get('error'))}")
-    failed += 0 if r.get("ok") else 1
-
-    # 等 WS 广播回来
-    found_chat = found_dice = False
-    deadline = time.time() + 10
-    while time.time() < deadline and not (found_chat and found_dice):
-        out = tools["events_poll"](since=0, limit=200)
-        if not out.get("ok"):
-            break
-        for e in out["data"]["events"]:
-            if e["event"] == "chat.message" and marker in str(e.get("payload")):
-                found_chat = True
-            if e["event"] in ("dice.rolled", "dice.rolled.secret") and "1d20+3" in str(e.get("payload")):
-                found_dice = True
-        if not (found_chat and found_dice):
-            time.sleep(0.5)
-
-    print(f"[events_poll 读到自己的聊天] {'PASS' if found_chat else 'FAIL'}")
-    print(f"[events_poll 读到自己的骰子] {'PASS' if found_dice else 'FAIL'}")
-    failed += (not found_chat) + (not found_dice)
-
-    ctx.ws.stop()
-    auth.stop()
-    print("\n写冒烟", "全部通过" if not failed else f"{failed} 项失败")
-    return 1 if failed else 0
+    ctx = Ctx.from_env()
+    try:
+        ctx.auth.login()
+        return run_checks(ctx)
+    finally:
+        ctx.close()
 
 
 if __name__ == "__main__":

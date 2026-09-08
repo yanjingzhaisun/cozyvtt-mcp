@@ -9,7 +9,7 @@ for lg in ('socketio.client','engineio.client'):
 
 auth = AuthManager(os.environ['COZYVTT_URL'], os.environ['COZYVTT_EMAIL'], os.environ['COZYVTT_PASSWORD'])
 auth.login()
-print("login ok, cookie:", auth.cookie_header()[:40], "...")
+print("login ok, session cookie present:", bool(auth.cookie_header()))
 
 sio = socketio.Client(reconnection=False, logger=True, engineio_logger=False)
 

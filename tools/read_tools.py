@@ -60,10 +60,18 @@ def register(mcp, get_ctx) -> None:
     @wrap
     def events_poll(since: int = 0, limit: int = 100) -> dict:
         """拉取 seq > since 的实时事件（玩家发言/骰子/移动），含骰史。
-        返回 {events, latest_seq}；把 latest_seq 存下当下次的 since 即可增量拉。"""
+        返回 events/next_seq/high_water_seq/gap；以 next_seq 作为下次 since。
+        latest_seq 为 next_seq 的兼容别名；gap 表示缓冲淘汰，cursor_reset 表示游标超出当前进程。"""
         ctx = get_ctx()
-        ctx.ensure_ws()
-        return ctx.ws.poll(since=since, limit=limit)
+        connection_error = None
+        try:
+            ctx.ensure_ws()
+        except RuntimeError as exc:
+            connection_error = str(exc)
+        result = ctx.ws.poll(since=since, limit=limit)
+        if connection_error:
+            result["connection_error"] = connection_error
+        return result
 
     @mcp.tool
     @wrap
@@ -79,6 +87,8 @@ def register(mcp, get_ctx) -> None:
         ctx = get_ctx()
         ctx.ensure_ws()
         rec = ctx.ws.latest("initiative.state")
+        if not ctx.ws.authenticated:
+            return {"state": None, "note": "WS 尚未认证，先攻状态不可用"}
         if not rec:
             return {"state": None, "note": "缓冲中尚无 initiative.state（可能未开战或 WS 未收到）"}
         return {"state": rec["payload"], "seq": rec["seq"], "ts": rec["ts"]}
@@ -115,9 +125,14 @@ def register(mcp, get_ctx) -> None:
         params = {"limit": min(limit, 100), "offset": offset}
         if search:
             params["search"] = search
+        source = source.strip().lower()
+        if source not in {"", "srd", "custom"}:
+            raise ValueError("source 只能为 srd / custom 或空字符串")
+        if source == "srd":
+            require_system(ctx, (SYSTEM_DND5E,), "SRD 怪库（Open5e 为 D&D 5e 数据源）")
+        elif not source and ctx.get_system() != SYSTEM_DND5E:
+            source = "custom"
         if source:
-            if source.strip().lower() == "srd":
-                require_system(ctx, (SYSTEM_DND5E,), "SRD 怪库（Open5e 为 D&D 5e 数据源）")
             params["source"] = source
         if cr:
             params["cr"] = cr

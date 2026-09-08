@@ -3,7 +3,20 @@ token_hp / initiative_manage / character_update / character_create /
 token_place_creature / session_manage"""
 from __future__ import annotations
 
-from tools import INITIATIVE_ROLL_SYSTEMS, require_system, wrap
+from copy import deepcopy
+
+from tools import INITIATIVE_ROLL_SYSTEMS, PartialFailure, require_system, wrap
+
+
+def merge_patch(current: dict, patch: dict) -> dict:
+    """字典递归合并；列表和标量整体替换；null 是显式值，不表示删除。"""
+    result = deepcopy(current)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = merge_patch(result[key], value)
+        else:
+            result[key] = deepcopy(value)
+    return result
 
 
 def register(mcp, get_ctx) -> None:
@@ -12,22 +25,28 @@ def register(mcp, get_ctx) -> None:
     @wrap
     def chat_send(content: str, type: str = "DM") -> dict:
         """DM 叙事 / NPC 台词。type 仅接受 DM / PLAYER（上游校验，2026-09-04 实测）。"""
+        if type not in {"DM", "PLAYER"}:
+            raise ValueError("type 只能为 DM / PLAYER")
+        if not content.strip() or len(content) > 2000:
+            raise ValueError("content 必须为非空字符串且不超过 2000 字符")
         ctx = get_ctx()
         ctx.ensure_ws()
-        ctx.ws.emit("chat.message", {"content": content, "type": type})
-        return {"sent": True, "content": content, "type": type}
+        return {**ctx.ws.emit("chat.message", {"content": content, "type": type}),
+                "content": content, "type": type}
 
     @mcp.tool
     @wrap
-    def dice_roll(expression: str, is_secret: bool = False) -> dict:
+    def dice_roll(expression: str, is_secret: bool = False, purpose: str = "") -> dict:
         """公证骰，如 1d20+5 / 2d6 / 4d6kh3。is_secret=true 暗骰（仅 DM 可见）。
+        purpose 可选，用于在广播中关联此次骰子（上游会原样携带）。
         客户端侧最小间隔 2.1s（WS 限流 30/min），排队不报错。"""
         ctx = get_ctx()
         ctx.ensure_ws()
-        ctx.dice_throttle()
-        ctx.ws.emit("dice.roll", {"expression": expression, "isSecret": is_secret})
-        return {"rolled": True, "expression": expression, "isSecret": is_secret,
-                "note": "结果经 events_poll 的 dice.rolled 事件回收"}
+        payload = {"expression": expression, "secret": is_secret}
+        if purpose:
+            payload["purpose"] = purpose
+        return {**ctx.send_dice(payload), "expression": expression, "secret": is_secret,
+                "purpose": purpose}
 
     @mcp.tool
     @wrap
@@ -68,8 +87,8 @@ def register(mcp, get_ctx) -> None:
         """改 token HP（delta 正=治疗 负=伤害，播报全桌 character.hp.updated）。"""
         ctx = get_ctx()
         ctx.ensure_ws()
-        ctx.ws.emit("character.hp.update", {"characterId": character_id, "delta": delta})
-        return {"sent": True, "characterId": character_id, "delta": delta}
+        return {**ctx.ws.emit("character.hp.update", {"characterId": character_id, "delta": delta}),
+                "characterId": character_id, "delta": delta}
 
     @mcp.tool
     @wrap
@@ -121,17 +140,34 @@ def register(mcp, get_ctx) -> None:
                 raise ValueError("reorder 需要 ordered_token_ids（token id 列表）")
             payload = {"orderedTokenIds": ordered_token_ids}
         ctx.ensure_ws()
-        ctx.ws.emit(f"initiative.{action}", payload)
-        return {"sent": True, "action": action, "payload": payload,
-                "note": "状态经 initiative_state / events_poll 回收"}
+        return {**ctx.ws.emit(f"initiative.{action}", payload),
+                "action": action, "payload": payload}
 
     @mcp.tool
     @wrap
     def character_update(character_id: str, data: dict) -> dict:
         """局部更新角色卡（SAN/HP/Luck/MP/法术位等结算由调用方算好传入，桥不做规则计算）。
-        data 为要 PUT 的字段 dict。"""
+        data 是请求字段，例如 {"data": {"hp": {"current": 5}}}；卡面 data 递归合并，
+        保留未提供字段。列表整体替换，null 为显式值。顶层允许 name/data/tokenImageUrl。
+        """
+        allowed = {"name", "data", "tokenImageUrl"}
+        if not data or set(data) - allowed:
+            raise ValueError("请提供 name/data/tokenImageUrl 字段；卡面补丁需放在 data 对象内")
+        if "data" in data and not isinstance(data["data"], dict):
+            raise ValueError("卡面 data 补丁必须是对象，不能整块清空")
         ctx = get_ctx()
-        return ctx.client.put(f"/api/characters/{character_id}", data)
+        path = f"/api/characters/{character_id}"
+        with ctx._character_lock:
+            payload = deepcopy(data)
+            if "data" in payload:
+                current = ctx.client.get(path)
+                character = current.get("character") if isinstance(current, dict) else None
+                if not isinstance(character, dict) or not isinstance(character.get("data"), dict):
+                    raise ValueError("上游角色响应缺少 data 对象，拒绝覆盖")
+                payload["data"] = merge_patch(character["data"], payload["data"])
+            # TODO(#2): 1.2.2 不支持 ETag/If-Match 或原子 JSON patch；此锁仅保护本进程
+            # 的 character_update。与浏览器/其他客户端同时保存仍需上游乐观锁支持。
+            return ctx.client.put(path, payload)
 
     @mcp.tool
     @wrap
@@ -147,7 +183,18 @@ def register(mcp, get_ctx) -> None:
             payload["data"] = data
         if token_image_url:
             payload["tokenImageUrl"] = token_image_url
-        return ctx.client.post("/api/characters", payload)
+        created = ctx.client.post("/api/characters", payload)
+        character = created.get("character") if isinstance(created, dict) else None
+        if not isinstance(character, dict) or not character.get("id"):
+            raise PartialFailure("建卡响应缺少角色 ID，无法确认创建状态；请检查上游，勿重复创建",
+                                 {"created": None, "response": created})
+        try:
+            ctx.client.post(f"/api/characters/{character['id']}/assign", {"campaignId": ctx.campaign_id})
+        except Exception as exc:
+            raise PartialFailure(
+                f"角色 {character['id']} 已创建但 roster 分配失败；请在 UI 分配此角色，勿重复创建: {exc}",
+                {"created": True, "assigned": False, "character": character}) from exc
+        return {**created, "assigned": True}
 
     @mcp.tool
     @wrap
@@ -178,7 +225,11 @@ def register(mcp, get_ctx) -> None:
         allowed = {"start", "pause", "end"}
         if action not in allowed:
             raise ValueError(f"action 必须是 {sorted(allowed)} 之一")
-        ctx.ensure_ws()
-        ctx.ws.emit(f"session.{action}", {})
-        return {"sent": True, "action": action,
-                "note": "结果经 events_poll 的 session.* 事件回收"}
+        path = f"/api/campaigns/{ctx.campaign_id}"
+        if action == "start":
+            return ctx.client.post(f"{path}/sessions")
+        campaign = ctx.client.get(path).get("campaign", {})
+        active = campaign.get("activeSession")
+        if not isinstance(active, dict) or not active.get("id"):
+            raise ValueError("当前战役没有活动场次，无法暂停或结束")
+        return ctx.client.put(f"{path}/sessions/{active['id']}/{action}")

@@ -14,11 +14,11 @@ Built for and tested with [Hermes Agent](https://github.com/NousResearch/hermes-
 
 ## Features
 
-20 tools, all returning a uniform `{ok, data, error}` shape (exceptions never escape the MCP layer):
+20 tools returning `{ok, data?, error?}` for tool-body results. MCP argument validation remains handled by FastMCP:
 
 - **Session/campaign**: `campaign_status` (incl. per-system feature surface), `session_manage`, `map_list`, `map_switch`
 - **Narration**: `chat_send` (DM / PLAYER), `chat_read`
-- **Dice**: `dice_roll` (server-side true random; `isSecret=true` for DM-only rolls, auditable via server logs), `events_poll` (incl. dice history — DICE_ROLL events are *not* in chat history)
+- **Dice**: `dice_roll` (server-side true random; `is_secret=true` (wire field: `secret`) for DM-only rolls, auditable via server logs), `events_poll` (incl. dice history — DICE_ROLL events are *not* in chat history)
 - **Tokens/maps**: `token_add`, `token_move`, `token_hp`, `token_place_creature`, `creature_search` (SRD + custom library)
 - **Combat**: `initiative_manage` (add / remove / **roll** / **set** / **reorder** / start / next / end), `initiative_state` (note: CoC7e initiative is DEX-ordered, no roll — this is upstream rules behavior, and `roll` is gated accordingly)
 - **Characters**: `character_list`, `character_get`, `character_create`, `character_validate`, `character_update` (rules math is done by the agent; the bridge just writes values)
@@ -32,7 +32,7 @@ The bridge stays game-system agnostic, but a few capabilities only make sense un
 | `creature_search source=srd` | `DND_5E` | The SRD library is seeded from Open5e — a D&D 5e data source |
 | `initiative_manage action=roll` | `DND_5E`, `PATHFINDER_2E`, `SHADOWRUN_6E` | The server derives the initiative dice per system; CoC7e doesn't roll at all (DEX order) |
 
-Gated calls return a clear `{ok: false, error}` explaining which systems are allowed, instead of emitting an event the server would ignore or misinterpret. Campaigns with no `gameSystem` set (flexible) fail closed. `campaign_status().features` reports the current campaign's available gated capabilities.
+Gated calls return a clear `{ok: false, error}` explaining which systems are allowed, instead of emitting an event the server would ignore or misinterpret. Campaigns with no `gameSystem` set (flexible) fail closed. With no `source` specified, non-5e campaigns search only `custom`; 5e campaigns may search both sources. `campaign_status().features` reports the current campaign's available gated capabilities.
 
 ## Architecture
 
@@ -41,8 +41,8 @@ MCP client (stdio)
   └─ server.py (FastMCP, lazy init, non-blocking self-check)
       ├─ auth.py        — rememberMe login, 10-min keepalive, 3-min re-login spacing, 429 backoff
       ├─ client.py      — REST wrapper: one 401→re-login→retry, 429 exponential backoff (1/2/4s, ≤3)
-      ├─ ws_listener.py — socket.io listener, 500-event ring buffer, auto-reconnect
-      └─ tools/         — the 18 MCP tools
+      ├─ ws_listener.py — socket.io listener, 500-event ring buffer, one reconnect worker
+      └─ tools/         — the 20 MCP tools
 ```
 
 Design notes:
@@ -50,6 +50,15 @@ Design notes:
 - **Dice discipline**: the agent never touches random numbers. All rolls are generated server-side, visible to the table, and persisted. Secret rolls are DM-only but auditable after the session.
 - **Rules live outside the bridge**: skill checks, SAN loss, damage — computed by the agent/GM, the bridge only performs authoritative rolls and writes results. The bridge is game-system agnostic.
 - `token_move` uses the documented REST PUT (server broadcasts `map.changed` over WS), not the undocumented drag-stream WS protocol.
+
+## Result and update contracts
+
+- `dice_roll`, `chat_send`, `token_hp`, and `initiative_manage` return `sent: true`, `confirmed: false`, `status: "pending"`. This confirms dispatch only. Read business broadcasts and `system.error` with `events_poll`; do not blindly replay writes. CozyVTT 1.2.2 does not provide correlated business ACKs. Dice can carry an optional `purpose` string to identify a result.
+- `events_poll` returns the oldest unread events first. Save `next_seq` for the next `since`; `latest_seq` is its compatibility alias. `high_water_seq` is the buffer high-water mark, not a pagination cursor. Check `gap`, `cursor_reset`, `has_more`, `connected`, and `authenticated`.
+- `character_update(character_id, data={"data": {"hp": {"current": 5}}})` recursively merges sheet fields before PUT. Unspecified fields survive; arrays/scalars replace values and `null` is explicit. Top-level fields are `name`, `data`, and `tokenImageUrl`. A process lock serializes updates from this bridge; concurrent browser saves still need upstream optimistic locking.
+- `character_create` creates the card and then assigns it to the roster. If assignment fails, the error includes the created character ID: assign that card in the UI instead of creating another.
+- `session_manage` uses REST. Pause/end resolve `campaign.activeSession.id`; start creates a session.
+- WS reconnects use fresh, URL-scoped Cookies and request current initiative state after campaign authentication. Use HTTPS for remote deployments.
 
 ## Requirements
 
@@ -109,13 +118,15 @@ COZYVTT_SMOKE=1 COZYVTT_URL=... COZYVTT_EMAIL=... COZYVTT_PASSWORD=... \
   COZYVTT_CAMPAIGN_ID=... .venv/bin/python scripts/smoke.py
 ```
 
-(`scripts/smoke_write.py` performs write operations — run it manually and only on a throwaway campaign.)
+(`scripts/smoke_write.py` writes chat, a public roll, and a secret roll — run it manually and only on a throwaway campaign. It checks sender and unique purpose; proving that players do not receive secret rolls additionally requires an independent player connection.)
+
+Offline tests block TCP connections and include real FastMCP in-memory and stdio checks; they do not require campaign credentials.
 
 ## Troubleshooting
 
 - **Logs**: `logs/cozyvtt-mcp.log` (auth events, WS state, tool calls; never contains passwords)
-- **Repeated 401s**: upstream auth rate limit is 5 logins / 15 min / IP. The bridge spaces re-logins ≥3 min; if a session dies inside the spacing window, it recovers automatically once the window passes
-- **`events_poll` empty**: WS not connected. Tool calls auto-`ensure_ws()`; check the log for `WS connected / campaign authenticated`
+- **Repeated 401s**: upstream auth rate limit is 5 logins / 15 min / IP. The bridge spaces re-logins ≥3 min; failed attempts also enter cooldown, and `Retry-After` can extend it; requests/background recovery can retry after the window passes
+- **`events_poll` empty**: may mean no new events. Inspect `connected`, `authenticated`, `last_error`, and `connection_error`; the single WS worker retries disconnected or rejected connections. Initialization failures can be retried after a 180-second cooldown without restarting.
 - **CoC7e initiative doesn't roll dice**: upstream behavior — CoC7e initiative is DEX-ordered, no roll is produced
 
 ## License

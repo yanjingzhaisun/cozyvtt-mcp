@@ -27,6 +27,19 @@ class FakeMCP:
         return fn
 
 
+def valid_result(name, result, campaign_id):
+    if not result.get("ok") or not isinstance(result.get("data"), dict):
+        return False
+    data = result["data"]
+    if name == "campaign_status":
+        campaign = data.get("campaign")
+        return (isinstance(campaign, dict) and campaign.get("id") == campaign_id
+                and bool(campaign.get("status")) and data.get("health", {}).get("reachable") is True)
+    key = {"chat_read": "messages", "map_list": "maps", "character_list": "roster",
+           "creature_search": "creatures"}[name]
+    return isinstance(data.get(key), list)
+
+
 def main() -> int:
     if os.environ.get("COZYVTT_SMOKE") != "1":
         print("需要 COZYVTT_SMOKE=1 显式开启")
@@ -41,67 +54,60 @@ def main() -> int:
     client = CozyClient(base, auth)
 
     from tools import Ctx
-    import threading
-    ctx = Ctx.__new__(Ctx)
-    ctx.client = client
-    ctx.auth = auth
-    ctx.campaign_id = cid
-    ctx._ws_started = True  # 只读冒烟不连 WS；events_poll 不在本脚本
-    ctx._ws_lock = threading.Lock()
-    ctx._dice_lock = threading.Lock()
-    ctx._last_dice_ts = 0.0
 
     class NoWS:
-        def poll(self, since=0, limit=100):
-            return {"events": [], "latest_seq": 0}
+        def start(self):
+            raise AssertionError("只读冒烟不应连接 WS")
 
-        def latest(self, e):
-            return None
-    ctx.ws = NoWS()
+        def stop(self):
+            pass
+    ctx = Ctx(client, auth, NoWS(), cid)
 
     mcp = FakeMCP()
     register_all(mcp, lambda: ctx)
     tools = mcp.tools
 
-    # 只登录一次
-    auth.login()
-    print(f"[login] ok, user={auth.user.get('displayName') if auth.user else '?'}")
+    try:
+        # 只登录一次
+        auth.login()
+        print(f"[login] ok, user={auth.user.get('displayName') if auth.user else '?'}")
 
-    checks = [
-        ("campaign_status", lambda: tools["campaign_status"]()),
-        ("chat_read", lambda: tools["chat_read"](limit=5)),
-        ("map_list", lambda: tools["map_list"]()),
-        ("character_list", lambda: tools["character_list"]()),
-        ("creature_search", lambda: tools["creature_search"](search="", limit=3)),
-    ]
-    failed = 0
-    for name, fn in checks:
-        r = fn()
-        if r.get("ok"):
-            data = r["data"]
-            hint = ""
-            if name == "campaign_status":
-                c = data.get("campaign", {})
-                hint = f"战役「{c.get('name')}」status={c.get('status')} map={c.get('currentMapId')}"
-            elif name == "map_list":
-                hint = f"{len(data.get('maps', []))} 张图"
-            elif name == "chat_read":
-                hint = f"total={data.get('pagination', {}).get('total')}"
-            elif name == "character_list":
-                hint = f"roster={len(data.get('roster', []))} 人"
-            elif name == "creature_search":
-                hint = f"keys={list(data.keys())[:4]}"
-            print(f"[{name}] PASS {hint}")
-        else:
-            failed += 1
-            print(f"[{name}] FAIL {r.get('error')}")
+        checks = [
+            ("campaign_status", lambda: tools["campaign_status"]()),
+            ("chat_read", lambda: tools["chat_read"](limit=5)),
+            ("map_list", lambda: tools["map_list"]()),
+            ("character_list", lambda: tools["character_list"]()),
+            ("creature_search", lambda: tools["creature_search"](search="", limit=3)),
+        ]
+        failed = 0
+        for name, fn in checks:
+            r = fn()
+            if valid_result(name, r, cid):
+                data = r["data"]
+                hint = ""
+                if name == "campaign_status":
+                    c = data.get("campaign", {})
+                    hint = f"战役「{c.get('name')}」status={c.get('status')} map={c.get('currentMapId')}"
+                elif name == "map_list":
+                    hint = f"{len(data.get('maps', []))} 张图"
+                elif name == "chat_read":
+                    hint = f"total={data.get('pagination', {}).get('total')}"
+                elif name == "character_list":
+                    hint = f"roster={len(data.get('roster', []))} 人"
+                elif name == "creature_search":
+                    hint = f"keys={list(data.keys())[:4]}"
+                print(f"[{name}] PASS {hint}")
+            else:
+                failed += 1
+                print(f"[{name}] FAIL {r.get('error', '响应结构不符合契约')}")
 
-    auth.stop()
-    if failed:
-        print(f"\n{failed}/{len(checks)} 失败")
-        return 1
-    print(f"\n全部 {len(checks)} 项只读冒烟通过")
-    return 0
+        if failed:
+            print(f"\n{failed}/{len(checks)} 失败")
+            return 1
+        print(f"\n全部 {len(checks)} 项只读冒烟通过")
+        return 0
+    finally:
+        ctx.close()
 
 
 if __name__ == "__main__":

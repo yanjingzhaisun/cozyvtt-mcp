@@ -23,7 +23,7 @@ class ApiError(Exception):
 
 
 class CozyClient:
-    """薄 REST 封装。auth 需提供 .session (requests.Session) 与 .relogin()。"""
+    """薄 REST 封装。auth 需提供线程安全的 .request() 与 .relogin()。"""
 
     def __init__(self, base_url: str, auth, timeout: float = 15.0,
                  backoff=(1.0, 2.0, 4.0), sleep=time.sleep):
@@ -53,7 +53,7 @@ class CozyClient:
         retried_401 = False
         while True:
             try:
-                resp = self.auth.session.request(method, url, **kwargs)
+                resp = self.auth.request(method, url, **kwargs)
             except Exception as e:  # 网络层错误
                 raise ApiError(0, f"{method} {path} 网络错误: {e}") from e
 
