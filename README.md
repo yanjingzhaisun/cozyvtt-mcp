@@ -156,6 +156,7 @@ MIT (see [LICENSE](LICENSE)). CozyVTT itself is AGPLv3 — this project is an in
 
 - CozyVTT upstream: https://github.com/CheekyChinchilla/CozyVTT
 - AI-integration discussion: https://github.com/CheekyChinchilla/CozyVTT/issues/32
+- Release history: [CHANGELOG.md](CHANGELOG.md)
 
 ## Ecosystem
 

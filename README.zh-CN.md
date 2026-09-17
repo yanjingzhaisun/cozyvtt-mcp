@@ -156,6 +156,7 @@ MIT（见 [LICENSE](LICENSE)）。CozyVTT 本体为 AGPLv3——本项目是独�
 
 - CozyVTT 上游：https://github.com/CheekyChinchilla/CozyVTT
 - AI 集成讨论：https://github.com/CheekyChinchilla/CozyVTT/issues/32
+- 版本历史：[CHANGELOG.md](CHANGELOG.md)
 
 ## 生态
 
