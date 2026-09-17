@@ -1,0 +1,162 @@
+# cozyvtt-mcp
+
+[English](README.md) | **中文**
+
+[CozyVTT](https://github.com/CheekyChinchilla/CozyVTT)（自托管、开源的虚拟跑团桌）的 MCP（Model Context Protocol）桥。让 AI agent 以 **DM/KP** 身份加入战役：聊天叙事、服务器公证骰、移动 token、切地图、管先攻、结算角色卡。
+
+为 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 打造并实测，但兼容任意 MCP 客户端（stdio 传输）。
+
+## 兼容性
+
+| cozyvtt-mcp | CozyVTT | 说明 |
+|---|---|---|
+| **0.2.0** | **v1.2.2 / v1.4.0** | 双基线：保留原有工具；新 REST 路由在旧实例上明确降级报错。离线契约测试 176/176；v1.4.0 真实实例冒烟（读写＋Documents/Saved Rolls 往返）2026-09-17 通过。 |
+| 0.1.1 | v1.2.2 | 上一版，20 个工具 |
+
+兼容表描述的是已支持的契约，不是推断的服务器版本。新功能在确认可用前一律报告 `unknown`；空列表或业务 404 不能作为路由不存在的证据。完整 37 工具契约见 [SPEC v2](SPEC.md)。
+
+## v0.2.0 变更与迁移
+
+- **新增 17 个工具**：Documents（9）、Saved Rolls（4）、DM 移交/收回（1）、Hit Dice 花费（1）、场次历史/摘要（2）。`saved_roll_list` 已返回完整宏，没有 `saved_roll_get`。
+- **Breaking change——`chat_read`**：移除 `offset`。先调 `chat_read(limit=20)`，之后把返回的 `pagination.nextCursor` 原样作 `cursor` 传入翻页；`nextCursor` 为 null 即到底。无游标元数据的旧实例只支持最新一页；翻历史会返回「此实例不支持可靠的历史游标分页；仅可读取最新一页。」而不是重复同一页。
+- 文档原文读取保留 MIME 与 ETag。文本返回 `{mime_type,etag,content}`；PDF 存到项目 `downloads/<document_id>.pdf` 并返回 `{mime_type,etag,file_path,file_size}`。传 `etag` 走 `If-None-Match`；304 返回 `{not_modified:true}` 让调用方复用已有内容。downloads 已 gitignore；上游删除不会清本地副本。
+- REST 401 会使现有 WS 认证与战役缓存失效。新增事件：`character.updated`、`campaign.dm.transferred`、`roster.updated`、`dice.historyCleared`。DM 移交会清角色/系统缓存；失去成员资格会取消 WS 认证。
+- `character_validate` 始终附 `validation_reliable:false`：上游 v1.4.0 会丢弃校验失败并误报 `isValid:true`；旧服务器的可靠性未知。
+- token 尺寸为整数 1..10；`token_move` 拒绝旁观者。切图分别报告 REST 落库与 WS 广播两个状态。`initiative_state(refresh=true)` 主动拉取最新状态，超时报告未知。
+
+REST 路由缺失型 404（上游原文 `The requested resource does not exist`）返回「当前 CozyVTT 实例未提供此功能；请升级到支持该功能的版本后重试。」；其他 404 返回「资源不存在或当前账号无权访问（HTTP 404）：<上游 message>」。错误 `data` 保留状态码与上游细节。向旧上传路由传 DOCUMENT 类型可能 400——原样返回该错误，不会换类型/scope 重试。
+
+## 功能
+
+37 个工具，工具体结果统一返回 `{ok, data?, error?}`；参数校验由 FastMCP 处理：
+
+- **场次/战役**：`campaign_status`（role 与 owner 分开报告；新能力键可为 `unknown`）、`session_manage`、`session_list`、`session_notes_update`、`campaign_transfer_dm`（owner 收回也走它）、`map_list`、`map_switch`
+- **叙事**：`chat_send`（DM / PLAYER）、`chat_read`
+- **骰子**：`dice_roll`（服务器真随机；`is_secret=true`（线上字段 `secret`）为仅 DM 可见的暗骰，可经服务器日志审计）、`events_poll`（含骰史——DICE_ROLL 事件**不在**聊天历史里）
+- **Token/地图**：`token_add`、`token_move`、`token_hp`、`token_place_creature`、`creature_search`（SRD＋自定义怪库）
+- **战斗**：`initiative_manage`（add / remove / **roll** / **set** / **reorder** / start / next / end）、`initiative_state`（注意：CoC7e 先攻按 DEX 排序不骰——这是上游规则行为，`roll` 已相应门控）
+- **角色**：`character_list`、`character_get`、`character_create`、`character_validate`、`character_update`（规则数值由 agent 计算，桥只负责写值）
+- **文档**：`document_upload`、`document_create`、`document_list`、`campaign_document_list`、`document_read`、`document_update`、`document_share`、`document_unshare`、`document_delete`
+- **Saved Rolls**：`saved_roll_list`、`saved_roll_create`、`saved_roll_update`、`saved_roll_delete`（按用户×战役私有；每用户每战役 50 条，表达式服务器校验）
+- **Hit Dice**：`character_hitdice_spend`（仅 DND_5E；只扣一次，不骰骰子不加血）
+
+## 系统门控
+
+桥保持规则系统无关，但少数能力只在特定系统下有意义，按战役 `gameSystem` 枚举门控（懒取并缓存；枚举：`DND_5E` / `PATHFINDER_2E` / `SHADOWRUN_6E` / `CALL_OF_CTHULHU_7E`）：
+
+| 能力 | 放行系统 | 原因 |
+|---|---|---|
+| `creature_search source=srd` | `DND_5E` | SRD 怪库由 Open5e 播种——那是 5e 数据源 |
+| `initiative_manage action=roll` | `DND_5E`、`PATHFINDER_2E`、`SHADOWRUN_6E` | 服务器按系统推导先攻骰式；CoC7e 根本不骰（DEX 排序） |
+| `character_hitdice_spend` | `DND_5E` | 仅本地系统门控。WS 无可靠能力探测手段；发送后永远是 pending 口径。 |
+
+被门控的调用返回明确的 `{ok: false, error}` 说明放行系统，而不是发出一个服务器会忽略或误解的事件。未设 `gameSystem` 的（flexible）战役 fail-closed。未指定 `source` 时，非 5e 战役只搜 `custom`；5e 战役可搜两种来源。`campaign_status().features` 报告当前战役可用的门控能力。
+
+## 架构
+
+```
+MCP client (stdio)
+  └─ server.py (FastMCP, lazy init, non-blocking self-check)
+      ├─ auth.py        — rememberMe login, 10-min keepalive, 3-min re-login spacing, 429 backoff
+      ├─ client.py      — REST wrapper: one 401→re-login→retry, 429 exponential backoff (1/2/4s, ≤3)
+      ├─ ws_listener.py — socket.io listener, 500-event ring buffer, one reconnect worker
+      └─ tools/         — 37 MCP tools (read/write, documents, campaign additions)
+```
+
+设计要点：
+
+- **骰子纪律**：agent 永不接触随机数。所有骰子由服务器生成、全桌可见、持久化。暗骰仅 DM 可见，但局后可审计。
+- **规则在桥外**：技能检定、SAN 损失、伤害——由 agent/GM 计算，桥只做公证骰与写值。桥对规则系统无关。
+- `token_move` 走 REST PUT；服务器检查 DM/controlledBy 权限，桥额外拒绝旁观者。REST 落库不代表有 `map.changed` 广播。`map_switch` 先 REST 落库再显式发 WS `map.change`；WS 失败不影响已成功的 REST 结果，也绝不重放。
+
+## 结果与更新契约
+
+- `dice_roll`、`chat_send`、`token_hp`、`initiative_manage`、`character_hitdice_spend` 返回 `sent: true`、`confirmed: false`、`status: "pending"`。业务广播与 `system.error` 用 `events_poll` 读；不要盲目重放写操作。两条基线都没有关联 ACK。骰子可带 `purpose` 与 `character_name`（线上 `characterName`）用于 Custom Roll 展示。Hit Dice 的花费、骰骰、回血是三个独立操作，不是事务；旧服务器可能静默忽略花费事件。
+- `events_poll` 最早未读优先。保存 `next_seq` 作为下次 `since`；`latest_seq` 是其兼容别名。`high_water_seq` 是缓冲高水位，不是分页游标。注意检查 `gap`、`cursor_reset`、`has_more`、`connected`、`authenticated`。
+- `character_update(character_id, data={"data": {"hp": {"current": 5}}})` 先递归合并卡面字段再 PUT。未指定的字段保留；数组/标量整体替换，`null` 为显式置空。顶层字段为 `name`、`data`、`tokenImageUrl`。本桥进程内串行化更新；浏览器并发保存仍需上游乐观锁。
+- `character_create` 先建卡、查 roster、确认未入列才 assign。assign 失败时错误信息带已建角色 ID：请在 UI 里 assign 该卡，别再建一张。CoC 的 conditions/Mythos/spells/appearance/notes 与 DND 的新旧生命骰字段在合并中都能存活；Keeper notes 对战役成员不保密。
+- `session_manage` 走 REST。pause/end 解析 `campaign.activeSession.id`；start 新建场次。end 接受 `notes`（≤2000 字，全战役可读）与 `save_state=true`。空 notes 不会清掉旧摘要；要清空用 `session_notes_update(session_id, notes="")`。`session_list` 的最近 50 条里可能含进行中场次。
+- Documents 的 scope 为 `USER`（个人）、`CAMPAIGN`、`GLOBAL`。`document_list` 过滤资产库；`campaign_document_list` 能发现被分享的私人文档。直接创建/编辑 txt/md 限 900 KiB UTF-8；文件上传走实例限额（默认 50 MiB）。PDF 内容不可编辑。unshare 只删一条 link，不能收回原生/global 来源的权限；`shared:false` 表示战役原生文档。删除会移除资产及其全部 links。
+- WS 重连使用最新的、按 URL 过滤的 Cookie，并在战役认证后主动请求当前先攻状态。远程部署请用 HTTPS。
+
+## 环境要求
+
+- Python ≥ 3.11
+- 一个 CozyVTT v1.2.2 或 v1.4.0 实例，以及你的账号在目标战役中拥有各工具所需权限
+- [uv](https://docs.astral.sh/uv/)（推荐）或 pip
+
+## 安装
+
+```bash
+git clone https://github.com/yanjingzhaisun/cozyvtt-mcp.git
+cd cozyvtt-mcp
+uv sync   # 或: python -m venv .venv && .venv/bin/pip install fastmcp requests "python-socketio[client]" websocket-client
+```
+
+## 配置
+
+环境变量（仓库不含任何密钥）：
+
+| 变量 | 示例 | 说明 |
+|---|---|---|
+| `COZYVTT_URL` | `http://localhost:8899` | 实例地址 |
+| `COZYVTT_EMAIL` | `dm@example.local` | DM 账号 |
+| `COZYVTT_PASSWORD` | — | DM 密码 |
+| `COZYVTT_CAMPAIGN_ID` | `uuid` | 目标战役 |
+
+### Hermes Agent（`config.yaml`）
+
+```yaml
+mcp_servers:
+  cozyvtt:
+    command: /path/to/cozyvtt-mcp/.venv/bin/python
+    args: [/path/to/cozyvtt-mcp/server.py]
+    env:
+      COZYVTT_URL: "http://localhost:8899"
+      COZYVTT_EMAIL: "dm@example.local"
+      COZYVTT_PASSWORD: "<secret>"
+      COZYVTT_CAMPAIGN_ID: "<campaign-uuid>"
+```
+
+注册后需重启 Hermes（MCP server 不热加载）。
+
+### 通用 MCP 客户端
+
+任意支持 stdio 的客户端：command 填 venv 的 python，args 填 `server.py`，env 同上。
+
+## 测试
+
+```bash
+.venv/bin/python -m pytest
+```
+
+对真实实例的只读冒烟：
+
+```bash
+COZYVTT_SMOKE=1 COZYVTT_URL=... COZYVTT_EMAIL=... COZYVTT_PASSWORD=... \
+  COZYVTT_CAMPAIGN_ID=... .venv/bin/python scripts/smoke.py
+```
+
+（`scripts/smoke_write.py` 会写聊天、一颗公骰和一颗暗骰——只在一次性测试战役里手动跑。它校验发送者与唯一 purpose；要证明玩家收不到暗骰，还需一个独立的玩家连接。）
+
+离线测试屏蔽 TCP，包含真实 FastMCP 内存与 stdio 检查，不需要战役凭证。对 v1.4.0 真实实例的集成验证已于 2026-09-17 完成（读写冒烟＋Documents、Saved Rolls 往返）。本地验证 venv 为 Python 3.12.13；Python 3.13 尚未验证。
+
+## 排障
+
+- **日志**：`logs/cozyvtt-mcp.log`（auth 事件、WS 状态、工具调用；绝不含密码）
+- **反复 401**：上游 auth 限流 5 次登录 / 15 分钟 / IP。桥的重登间隔 ≥3 分钟；失败尝试也进冷却，`Retry-After` 可延长；窗口过后请求/后台恢复会重试
+- **`events_poll` 为空**：可能只是没有新事件。检查 `connected`、`authenticated`、`last_error`、`connection_error`；单一 WS 工作线程会重连断开的连接。初始化失败有 180 秒冷却，过后可不重启重试
+- **CoC7e 先攻不骰骰**：上游行为——CoC7e 先攻按 DEX 排序，本来就不产生骰子
+
+## 许可证
+
+MIT（见 [LICENSE](LICENSE)）。CozyVTT 本体为 AGPLv3——本项目是独立的 API 客户端，不含 CozyVTT 代码。
+
+## 链接
+
+- CozyVTT 上游：https://github.com/CheekyChinchilla/CozyVTT
+- AI 集成讨论：https://github.com/CheekyChinchilla/CozyVTT/issues/32
+
+## 生态
+
+- [dnd5e-rules](https://github.com/yanjingzhaisun/dnd5e-rules)——确定性 D&D 5e 规则结算（纯函数，SRD 5.1 数据 CC-BY-4.0）。与本桥配套的规则层：服务器出骰面，桥负责传输，这个库算数，agent 负责叙事。

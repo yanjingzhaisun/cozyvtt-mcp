@@ -1,5 +1,7 @@
 # cozyvtt-mcp
 
+**English** | [中文](README.zh-CN.md)
+
 MCP (Model Context Protocol) bridge for [CozyVTT](https://github.com/CheekyChinchilla/CozyVTT) — the self-hosted, open-source virtual tabletop. It lets an AI agent join a campaign as **DM/KP**: narrate over chat, roll server-authoritative dice on the server, move tokens, switch maps, manage initiative, and settle character sheets.
 
 Built for and tested with [Hermes Agent](https://github.com/NousResearch/hermes-agent), but works with any MCP client (stdio transport).
@@ -8,7 +10,7 @@ Built for and tested with [Hermes Agent](https://github.com/NousResearch/hermes-
 
 | cozyvtt-mcp | CozyVTT | Notes |
 |---|---|---|
-| **0.2.0** | **v1.2.2 / v1.4.0** | Dual baseline: retain original tools; new REST routes degrade explicitly on old instances. Offline contract tests; no v1.4.0 live smoke performed. |
+| **0.2.0** | **v1.2.2 / v1.4.0** | Dual baseline: retain original tools; new REST routes degrade explicitly on old instances. Offline contract tests 176/176; live v1.4.0 smoke (read/write + Documents/Saved Rolls round-trips) passed 2026-09-17. |
 | 0.1.1 | v1.2.2 | Previous 20-tool release |
 
 The compatibility table describes supported contracts, not an inferred server version. New feature availability is `unknown` until established; an empty list or a business 404 is not evidence that the route is missing. See [SPEC v2](SPEC.md) for the complete 37-tool contract.
@@ -137,7 +139,7 @@ COZYVTT_SMOKE=1 COZYVTT_URL=... COZYVTT_EMAIL=... COZYVTT_PASSWORD=... \
 
 (`scripts/smoke_write.py` writes chat, a public roll, and a secret roll — run it manually and only on a throwaway campaign. It checks sender and unique purpose; proving that players do not receive secret rolls additionally requires an independent player connection.)
 
-Offline tests block TCP connections and include real FastMCP in-memory and stdio checks; they do not require campaign credentials. The existing local venv used for v0.2.0 verification runs Python 3.12.13; Python 3.13 and live v1.4.0 integration remain unverified.
+Offline tests block TCP connections and include real FastMCP in-memory and stdio checks; they do not require campaign credentials. Live integration against a v1.4.0 instance was verified 2026-09-17 (read/write smoke plus Documents and Saved Rolls round-trips). The local venv used for verification runs Python 3.12.13; Python 3.13 remains unverified.
 
 ## Troubleshooting
 
