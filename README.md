@@ -18,13 +18,13 @@ The compatibility table describes supported contracts, not an inferred server ve
 ## v0.2.0 changes and migration
 
 - **17 new tools**: Documents (9), Saved Rolls (4), DM transfer/reclaim (1), Hit Dice spend (1), session history/notes (2). `saved_roll_list` already returns complete macros; there is no `saved_roll_get`.
-- **Breaking change — `chat_read`**: remove `offset`. Call `chat_read(limit=20)` first, then pass the returned `pagination.nextCursor` as `cursor`. Messages and pagination pass through unchanged. If `nextCursor` is null, stop. Old instances without cursor metadata support only the latest page; history requests return `此实例不支持可靠的历史游标分页；仅可读取最新一页。` instead of repeating it.
+- **Breaking change — `chat_read`**: remove `offset`. Call `chat_read(limit=20)` first, then pass the returned `pagination.nextCursor` as `cursor`. Messages and pagination pass through unchanged. If `nextCursor` is null, stop. Old instances without cursor metadata support only the latest page; history requests return `This instance does not support reliable cursor pagination for history; only the latest page can be read.` instead of repeating it.
 - Raw document reads preserve MIME type and ETag. Text returns `{mime_type,etag,content}`; PDFs are saved to project `downloads/<document_id>.pdf` and return `{mime_type,etag,file_path,file_size}`. Pass `etag` for `If-None-Match`; 304 returns `{not_modified:true}` for the caller to reuse existing content. Downloads are Git-ignored; upstream deletion does not remove local copies.
 - REST 401 invalidates existing WS authentication and campaign caches. New events include `character.updated`, `campaign.dm.transferred`, `roster.updated`, and `dice.historyCleared`. DM transfer clears role/system caches; losing membership cancels WS authentication.
 - `character_validate` always includes `validation_reliable:false`: upstream v1.4.0 can discard validation failures and incorrectly report `isValid:true`; reliability on older servers is unknown.
 - Token sizes are integers 1..10; `token_move` rejects spectators. Map switching reports REST persistence separately from WS broadcast dispatch. `initiative_state(refresh=true)` requests fresh state and reports unknown on timeout.
 
-REST route-missing 404 with the exact upstream message `The requested resource does not exist` returns `当前 CozyVTT 实例未提供此功能；请升级到支持该功能的版本后重试。`. Other 404s return `资源不存在或当前账号无权访问（HTTP 404）：<upstream message>`. Error `data` preserves status and upstream details. Uploading DOCUMENT to an old upload route may return 400; that error is preserved without retrying with a different type or scope.
+REST route-missing 404 with the exact upstream message `The requested resource does not exist` returns `This CozyVTT instance does not provide this feature; upgrade to a supported version and retry.`. Other 404s return `Resource not found or inaccessible to the current account (HTTP 404): <upstream message>`. Error `data` preserves status and upstream details. Uploading DOCUMENT to an old upload route may return 400; that error is preserved without retrying with a different type or scope.
 
 ## Features
 

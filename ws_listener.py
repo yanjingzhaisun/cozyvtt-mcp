@@ -1,4 +1,4 @@
-"""Socket.IO 监听：单一重连线程、战役认证状态、带缺口提示的事件缓冲。"""
+"""Socket.IO listener: one reconnect worker, campaign authentication, and an event buffer with gap detection."""
 from __future__ import annotations
 
 import logging
@@ -22,7 +22,7 @@ class WSListener:
                  capacity: int = 500, sio_factory=None, auth_refresh=None,
                  reconnect_backoff=(1.0, 2.0, 4.0, 15.0), auth_timeout=10.0):
         if capacity < 1:
-            raise ValueError("capacity 必须大于 0")
+            raise ValueError("capacity must be greater than 0")
         self.base_url = base_url.rstrip("/")
         self.campaign_id = campaign_id
         self._cookie_getter = cookie_getter
@@ -31,7 +31,7 @@ class WSListener:
         self._auth_timeout = auth_timeout
         self._buf: deque = deque(maxlen=capacity)
         self._lock = threading.Lock()
-        # 状态转换、发送和回调共享 RLock；旧连接回调通过 generation 隔离。
+        # State transitions, sends, and callbacks share an RLock; generation isolates old callbacks.
         self._state = threading.Condition(threading.RLock())
         self._lifecycle_lock = threading.Lock()
         self._stop = threading.Event()
@@ -51,7 +51,7 @@ class WSListener:
         self._auth_error: str | None = None
         if sio_factory is None:
             import socketio
-            # 只有本类的线程负责重连，避免与工具调用或库内重连任务竞争。
+            # Only this worker reconnects, avoiding races with tool calls and library reconnect tasks.
             sio_factory = lambda: socketio.Client(
                 reconnection=False, logger=False, engineio_logger=False, request_timeout=5)
         self._sio_factory = sio_factory
@@ -73,7 +73,7 @@ class WSListener:
                 sio.emit("authenticate", {"campaignId": self.campaign_id})
 
         def on_connect():
-            # 不在这里清除认证；connected/authenticated 可由其他收包线程先处理。
+            # Do not clear authentication here; another receiver may have handled connected/authenticated first.
             self._namespace_ready = True
             authenticate_if_ready()
 
@@ -148,7 +148,7 @@ class WSListener:
 
     def poll(self, since: int = 0, limit: int = 100) -> dict:
         if since < 0 or not 1 <= limit <= 500:
-            raise ValueError("since 必须 >= 0，limit 必须在 1..500")
+            raise ValueError("since must be >= 0 and limit must be in 1..500")
         with self._lock:
             oldest = self._buf[0]["seq"] if self._buf else self._seq + 1
             cursor_reset = since > self._seq
@@ -156,7 +156,7 @@ class WSListener:
             events = [r for r in self._buf if r["seq"] > effective_since][:limit]
             next_seq = events[-1]["seq"] if events else effective_since
             result = {"events": deepcopy(events), "next_seq": next_seq,
-                      # 兼容原有把 latest_seq 当读取游标的调用方。
+                      # Keep compatibility with callers that use latest_seq as the read cursor.
                       "latest_seq": next_seq, "high_water_seq": self._seq,
                       "oldest_seq": oldest, "gap": effective_since < oldest - 1,
                       "cursor_reset": cursor_reset,
@@ -177,7 +177,7 @@ class WSListener:
         return None
 
     def start(self, wait_timeout: float = 15.0) -> None:
-        """启动唯一的后台连接管理线程，首次认证失败返回明确错误。"""
+        """Start the single connection worker; report initial authentication failures explicitly."""
         with self._lifecycle_lock:
             if not self._thread or not self._thread.is_alive():
                 self._stop.clear()
@@ -193,7 +193,7 @@ class WSListener:
                     break
                 self._state.wait(remaining)
             if not (self.authenticated and self.connected):
-                raise RuntimeError(f"WS 尚未认证，后台将重试: {self.last_error or '连接超时'}")
+                raise RuntimeError(f"WS is not authenticated; the background worker will retry: {self.last_error or 'connection timed out'}")
 
     def invalidate_auth(self, reason: str) -> None:
         with self._state:
@@ -206,7 +206,7 @@ class WSListener:
             self._state.notify_all()
 
     def wait_for_event(self, event: str, since: int, timeout: float = 2.0):
-        """等待当前连接上序号更新的事件；仅用于读请求，不将广播当写 ACK。"""
+        """Wait for a newer event on the current connection; for reads only, never a write ACK."""
         deadline = time.monotonic() + timeout
         with self._state:
             while self.authenticated and self.connected:
@@ -225,7 +225,7 @@ class WSListener:
             sio = None
             try:
                 if self._refresh_needed and self._auth_refresh:
-                    self._auth_refresh()  # AuthManager 在失败时也执行跨调用冷却
+                    self._auth_refresh()  # AuthManager enforces cooldown across calls, including failed attempts
                 if self._stop.is_set():
                     break
                 with self._state:
@@ -237,7 +237,7 @@ class WSListener:
                     sio = self._sio_factory()
                     self.sio = sio
                     self._register_handlers(sio, self._generation)
-                # 每次连接取最新 Cookie，包括 REST 重登录后产生的新值。
+                # Use the latest Cookie for every connection, including updates from REST re-login.
                 sio.connect(self.base_url, headers=lambda: {"Cookie": self._cookie_getter()},
                             wait_timeout=15)
                 deadline = time.monotonic() + self._auth_timeout
@@ -246,10 +246,10 @@ class WSListener:
                     while not self.authenticated and not self._failed and not self._stop.is_set():
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
-                            raise RuntimeError("WS 战役认证超时")
+                            raise RuntimeError("WS campaign authentication timed out")
                         self._state.wait(remaining)
                     if self._failed:
-                        raise RuntimeError(self._auth_error or "WS 连接已断开")
+                        raise RuntimeError(self._auth_error or "WS connection closed")
                     if self.authenticated:
                         attempt = 0
                     while not self._failed and not self._stop.is_set():
@@ -258,10 +258,10 @@ class WSListener:
                 with self._state:
                     self.last_error = str(exc)
                     self._append("system.error", {"detail": str(exc), "phase": "connect"})
-                log.warning("WS 连接失败: %s", exc)
+                log.warning("WS connection failed: %s", exc)
             finally:
                 with self._state:
-                    # 先使旧回调失效，再关闭连接，避免晚到的 authenticated 恢复旧状态。
+                    # Invalidate old callbacks before disconnecting so a late authenticated event cannot restore stale state.
                     self._generation += 1
                     self.authenticated = False
                     self._initial_done = True
@@ -270,7 +270,7 @@ class WSListener:
                     try:
                         sio.disconnect()
                     except Exception:
-                        log.debug("WS 清理失败", exc_info=True)
+                        log.debug("WS cleanup failed", exc_info=True)
             if self._stop.wait(self._backoff[min(attempt, len(self._backoff) - 1)]):
                 break
             attempt += 1
@@ -284,14 +284,14 @@ class WSListener:
                     break
                 self._state.wait(remaining)
             if not self.connected or not self.authenticated:
-                raise RuntimeError(f"WS 未完成战役认证: {self._auth_error or self.last_error or '未连接'}")
+                raise RuntimeError(f"WS campaign authentication is incomplete: {self._auth_error or self.last_error or 'not connected'}")
             with self._lock:
                 since = self._seq
             self.sio.emit(event, payload)
-            # TODO(#11): 上游 1.2.2 没有 requestId/业务 ACK，不能可靠关联异步广播或
-            # error 与某次调用。返回 pending，错误经 events_poll 暴露；绝不自动重放写操作。
+            # TODO(#11): Upstream 1.2.2 has no requestId/business ACK, so asynchronous broadcasts or
+            # errors cannot be reliably matched to a call. Return pending; expose errors via events_poll; never replay writes.
             return {"sent": True, "confirmed": False, "status": "pending", "since": since,
-                    "note": "仅确认已发送；请轮询业务结果和 system.error，勿盲目重试写操作"}
+                    "note": "Dispatch only; poll for business results and system.error. Do not blindly retry writes."}
 
     @property
     def connected(self) -> bool:

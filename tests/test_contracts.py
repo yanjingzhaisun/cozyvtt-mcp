@@ -1,4 +1,4 @@
-"""固定 CozyVTT 1.2.2 契约的离线回归；不访问真实实例。"""
+"""Offline regression tests for CozyVTT 1.2.2 contracts; no live instance access."""
 import asyncio
 import copy
 import json
@@ -113,7 +113,7 @@ def test_create_assign_and_partial_failure(assign_status):
     if assign_status != 200:
         assert out["data"]["created"] and not out["data"]["assigned"]
         assert out["data"]["character"]["id"] == "new-card"
-        assert "勿重复创建" in out["error"]
+        assert "do not create again" in out["error"]
 
 
 def test_secret_roll_uses_upstream_field_and_pending_receipt():
@@ -158,9 +158,9 @@ def test_failed_login_cooldown_across_calls(status):
     responses.post(f"{BASE}/api/auth/login", json={"message": "failed"}, status=status)
     with pytest.raises(AuthError):
         auth.relogin()
-    with pytest.raises(AuthError, match="冷却"):
+    with pytest.raises(AuthError, match="cooldown"):
         auth.relogin()
-    with pytest.raises(AuthError, match="冷却"):
+    with pytest.raises(AuthError, match="cooldown"):
         auth.login()
     assert len(responses.calls) == 1
     clock[0] += 181
@@ -177,7 +177,7 @@ def test_login_retry_after_extends_cooldown():
     with pytest.raises(AuthError):
         auth.login()
     clock[0] += 500
-    with pytest.raises(AuthError, match="冷却"):
+    with pytest.raises(AuthError, match="cooldown"):
         auth.relogin()
     assert len(responses.calls) == 1
 
@@ -221,14 +221,14 @@ def test_handshake_reordered_callbacks_and_wrong_campaign():
     ws = WSListener(BASE, CID, lambda: "", sio_factory=FakeSIO)
     sio = ws.sio
     sio.connected = True
-    sio.push("connected", {})  # 应用 connected 先于 namespace connect
+    sio.push("connected", {})  # Application connected arrives before namespace connect
     assert not sio.emitted
     sio.handlers["connect"]()
     assert sio.emitted == [("authenticate", {"campaignId": CID})]
     sio.push("authenticated", {"campaignId": "wrong"})
     assert not ws.authenticated
     sio.push("authenticated", {"campaignId": CID})
-    sio.handlers["connect"]()  # 迟到回调不能清除已认证状态
+    sio.handlers["connect"]()  # A late callback must not clear authenticated state
     assert ws.authenticated
 
 
@@ -242,7 +242,7 @@ def test_business_rejection_is_visible_and_never_confirmed():
     out = ws.poll(since=receipt["since"])
     assert out["events"][-1]["event"] == "system.error"
     assert "Invalid dice expression" in out["last_error"]
-    assert ws.authenticated  # 业务错误不能打掉正常连接
+    assert ws.authenticated  # Business errors must not invalidate a healthy connection
 
 
 class AutoSIO(FakeSIO):
@@ -274,7 +274,7 @@ def test_supervisor_reconnects_refreshes_cookie_and_ignores_old_callbacks():
         assert old.connect_headers == {"Cookie": "sid=old"}
         cookies[0] = "sid=new"
         old.disconnect()
-        # 等管理线程进入新连接；Event/Condition 避免任意长 sleep。
+        # Wait for the worker to establish a new connection; use Event/Condition instead of arbitrary sleeps.
         with ws._state:
             assert ws._state.wait_for(lambda: ws.sio is not old and ws.authenticated, timeout=2)
         assert ws.sio.connect_headers == {"Cookie": "sid=new"}
@@ -284,7 +284,7 @@ def test_supervisor_reconnects_refreshes_cookie_and_ignores_old_callbacks():
         assert any(e["event"] == "system.reconnected" for e in ws.poll()["events"])
         ctx = Ctx(None, None, ws, CID)
         ctx.ensure_ws()
-        assert len(instances) == 3  # 初始未连接对象 + 两次连接，没有竞争连接
+        assert len(instances) == 3  # Initial unconnected object plus two connections; no competing connections
     finally:
         ws.stop()
     assert not ws._thread.is_alive() and not ws.connected
@@ -322,7 +322,7 @@ def test_supervisor_auth_timeout_and_stop():
     ws = WSListener(BASE, CID, lambda: "", sio_factory=FakeSIO,
                     auth_timeout=0.02, reconnect_backoff=(10,))
     try:
-        with pytest.raises(RuntimeError, match="认证超时"):
+        with pytest.raises(RuntimeError, match="authentication timed out"):
             ws.start(wait_timeout=2)
     finally:
         ws.stop()
@@ -359,7 +359,7 @@ def test_cursor_reset_replays_new_process_events():
 def test_disconnect_still_allows_polling_errors():
     ws = make_ws()
     ws.sio.push("error", {"message": "Unauthorized"})
-    ws.start = Mock(side_effect=RuntimeError("WS 尚未认证"))
+    ws.start = Mock(side_effect=RuntimeError("WS is not authenticated"))
     ctx = make_ctx(ws=ws)
     out = build_tools(ctx)["events_poll"]()
     assert out["ok"] and not out["data"]["authenticated"]
@@ -424,8 +424,8 @@ def test_read_smoke_rejects_success_envelope_without_business_data():
 
 
 def test_secret_contract_routes_to_dm_only_for_dm_roller():
-    # 契约 fixture：1.2.2 dice handler 读取 secret；忽略未知的 isSecret。
-    # 模拟服务端路由而不生成随机数或连接真实玩家。
+    # Contract fixture: the 1.2.2 dice handler reads secret and ignores the unknown isSecret field.
+    # Simulate server routing without generating random numbers or connecting to real players.
     ctx = make_ctx()
     build_tools(ctx)["dice_roll"]("1d20", is_secret=True, purpose="privacy-contract")
     _, payload = ctx.ws.emitted[-1]
@@ -438,8 +438,8 @@ def test_network_login_failure_also_enters_cooldown():
     import requests
     auth = AuthManager(BASE, "dummy", "dummy")
     responses.post(f"{BASE}/api/auth/login", body=requests.ConnectionError("offline"))
-    with pytest.raises(AuthError, match="网络错误"):
+    with pytest.raises(AuthError, match="network error"):
         auth.relogin()
-    with pytest.raises(AuthError, match="冷却"):
+    with pytest.raises(AuthError, match="cooldown"):
         auth.relogin()
     assert len(responses.calls) == 1

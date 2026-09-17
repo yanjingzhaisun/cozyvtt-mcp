@@ -1,9 +1,9 @@
-"""cozyvtt-mcp — 认证层。
+"""cozyvtt-mcp — authentication layer.
 
-- 启动 POST /api/auth/login（json: email/password/rememberMe:true），cookie 存 requests.Session
-- 保活：后台线程每 10 min GET /api/auth/ping（普通 session 空闲 1h 过期）
-- 重登录间隔不小于 min_relogin_interval（默认 180s，auth 限流 5次/15min/IP）
-- 登录遇 429：指数退避 1/2/4s 最多 3 次，仍失败抛错，不循环撞墙
+- On startup, POST /api/auth/login (JSON: email/password/rememberMe:true); store cookies in requests.Session.
+- Keepalive: GET /api/auth/ping every 10 minutes in a worker (ordinary sessions expire after 1 hour idle).
+- Space re-logins by min_relogin_interval (default 180s; auth limit: 5 requests/15min/IP).
+- Login 429: back off 1/2/4s, at most three retries, then raise instead of retrying indefinitely.
 """
 from __future__ import annotations
 
@@ -46,17 +46,17 @@ class AuthManager:
         self._keepalive_thread: threading.Thread | None = None
         self.user: dict | None = None
 
-    # ---- 登录 ----
+    # ---- Login ----
 
     def login(self) -> dict:
-        """登录。429 指数退避，最多 len(backoff)+1 次尝试。"""
+        """Log in with exponential backoff for 429; at most len(backoff)+1 attempts."""
         with self._lock:
             return self._login_locked()
 
     def _login_locked(self) -> dict:
         remaining = self._next_login_ts - self._clock()
         if remaining > 0:
-            raise AuthError(f"登录冷却中，请在 {remaining:.1f}s 后重试")
+            raise AuthError(f"Login cooldown; retry in {remaining:.1f}s")
         url = f"{self.base_url}/api/auth/login"
         payload = {"email": self.email, "password": self.password, "rememberMe": True}
         last_err = None
@@ -66,9 +66,9 @@ class AuthManager:
             try:
                 resp = self.session.post(url, json=payload, timeout=15)
             except Exception as e:
-                raise AuthError(f"登录请求网络错误: {e}") from e
+                raise AuthError(f"Login request network error: {e}") from e
             if resp.status_code == 429:
-                last_err = AuthError("登录被限流 (429)")
+                last_err = AuthError("Login rate limited (429)")
                 retry_after = resp.headers.get("Retry-After")
                 if retry_after:
                     try:
@@ -80,10 +80,10 @@ class AuthManager:
                             delay = 0.0
                     if delay > 0:
                         self._next_login_ts = max(self._next_login_ts, self._clock() + delay)
-                        break  # 不在工具线程中等待很长的服务端冷却窗口
+                        break  # Do not block the tool thread for a long server cooldown
                 if attempt < len(self.backoff):
                     delay = self.backoff[attempt]
-                    log.warning("登录 429，退避 %.1fs（第 %d 次）", delay, attempt + 1)
+                    log.warning("Login 429; backing off %.1fs (retry %d)", delay, attempt + 1)
                     self._sleep(delay)
                     continue
                 break
@@ -93,38 +93,38 @@ class AuthManager:
                     msg = error_data.get("message", resp.text[:200]) if isinstance(error_data, dict) else resp.text[:200]
                 except ValueError:
                     msg = resp.text[:200]
-                raise AuthError(f"登录失败 HTTP {resp.status_code}: {msg}")
+                raise AuthError(f"Login failed HTTP {resp.status_code}: {msg}")
             try:
                 data = resp.json() if resp.content else {}
             except ValueError as exc:
-                raise AuthError("登录响应不是有效 JSON") from exc
+                raise AuthError("Login response is not valid JSON") from exc
             if not isinstance(data, dict) or not isinstance(data.get("user"), dict):
-                raise AuthError("登录响应缺少 user 对象")
+                raise AuthError("Login response is missing the user object")
             self._last_login_ts = self._clock()
             self._next_login_ts = self._last_login_ts + self.min_relogin_interval
             self._login_failed = False
             self.user = data.get("user")
-            log.info("登录成功: %s", (self.user or {}).get("email", self.email))
+            log.info("Login successful: %s", (self.user or {}).get("email", self.email))
             return data
-        raise last_err or AuthError("登录失败：429 限流")
+        raise last_err or AuthError("Login failed: rate limited (429)")
 
     def relogin(self) -> bool:
-        """401 触发的重登录。距上次成功登录不足 min_relogin_interval 时跳过
-        （避免撞 5次/15min 限流），返回是否真正执行了登录。"""
+        """Re-log in after a 401. Skip within min_relogin_interval of the last successful login
+        to respect the 5 requests/15min limit. Return whether a login was performed."""
         with self._lock:
             if self._clock() < self._next_login_ts:
                 if self._login_failed:
-                    raise AuthError(f"登录冷却中，请在 {self._next_login_ts - self._clock():.1f}s 后重试")
-                return False  # 另一并发请求刚刷新过会话，允许 REST 重试
+                    raise AuthError(f"Login cooldown; retry in {self._next_login_ts - self._clock():.1f}s")
+                return False  # Another concurrent request just refreshed the session; allow the REST retry
             self._login_locked()
             return True
 
     def request(self, method: str, url: str, **kwargs):
-        """序列化共享 Session 的请求与 Cookie 更新。"""
+        """Serialize requests and Cookie updates on the shared Session."""
         with self._lock:
             return self.session.request(method, url, **kwargs)
 
-    # ---- 保活 ----
+    # ---- Keepalive ----
 
     def ping(self) -> bool:
         try:
@@ -133,10 +133,10 @@ class AuthManager:
                 self.relogin()
             ok = resp.status_code == 200
             if not ok:
-                log.warning("keepalive ping 返回 %s", resp.status_code)
+                log.warning("Keepalive ping returned %s", resp.status_code)
             return ok
         except Exception as e:
-            log.warning("keepalive ping 异常: %s", e)
+            log.warning("Keepalive ping failed: %s", e)
             return False
 
     def start_keepalive(self) -> None:
@@ -158,10 +158,10 @@ class AuthManager:
         with self._lock:
             self.session.close()
 
-    # ---- WS 握手用 ----
+    # ---- WS handshake ----
 
     def cookie_header(self) -> str:
-        """按 Socket.IO 默认握手 URL 应用 Domain/Path/Secure/Expires 策略。"""
+        """Apply Domain/Path/Secure/Expires rules for the default Socket.IO handshake URL."""
         parts = urlsplit(self.base_url)
         url = urlunsplit((parts.scheme, parts.netloc, "/socket.io/", "", ""))
         with self._lock:

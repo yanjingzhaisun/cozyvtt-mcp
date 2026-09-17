@@ -1,4 +1,4 @@
-"""初始化并发与真实 stdio 生命周期；所有上游交互均离线。"""
+"""Concurrent initialization and real stdio lifecycle; all upstream interactions are offline."""
 import asyncio
 import sys
 import threading
@@ -45,7 +45,7 @@ def test_concurrent_first_calls_initialize_once(fresh_server, monkeypatch):
     assert factory.call_count == 1
     ctx.auth.login.assert_called_once()
     ctx.auth.start_keepalive.assert_called_once()
-    ctx.ensure_ws.assert_not_called()  # REST 首次调用不依赖 WS
+    ctx.ensure_ws.assert_not_called()  # The first REST call does not depend on WS
 
 
 def test_initialization_failure_cleans_up_and_recovers(fresh_server, monkeypatch):
@@ -59,7 +59,7 @@ def test_initialization_failure_cleans_up_and_recovers(fresh_server, monkeypatch
     with pytest.raises(RuntimeError, match="temporary outage"):
         server.get_ctx()
     failed.close.assert_called_once()
-    with pytest.raises(RuntimeError, match="冷却"):
+    with pytest.raises(RuntimeError, match="cooldown"):
         server.get_ctx()
     assert factory.call_count == 1
     clock[0] += server.INIT_RETRY_INTERVAL + 1
@@ -82,7 +82,7 @@ def test_stdio_list_and_validation_without_live_campaign(tmp_path):
     from fastmcp import Client
     from fastmcp.client.transports import StdioTransport
     root = Path(__file__).resolve().parent.parent
-    # 子进程也禁用网络；工具列表和参数校验不应触发上游连接。
+    # Disable networking in the subprocess too; tool listing and argument validation must not connect upstream.
     bootstrap = (
         "import socket,runpy; "
         "socket.socket.connect=socket.create_connection=lambda *a,**k: (_ for _ in ()).throw(RuntimeError('network disabled')); "
@@ -101,5 +101,5 @@ def test_stdio_list_and_validation_without_live_campaign(tmp_path):
             assert invalid.is_error
             missing_env = await client.call_tool("chat_read", {})
             assert missing_env.data["ok"] is False
-            assert "缺少" in missing_env.data["error"]
+            assert "Missing" in missing_env.data["error"]
     asyncio.run(asyncio.wait_for(run(), timeout=15))

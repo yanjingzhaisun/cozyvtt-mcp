@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""只读冒烟：campaign_status / chat_read / map_list / character_list / creature_search。
+"""Read-only smoke test: campaign_status / chat_read / map_list / character_list / creature_search。
 
-用法：
+Usage:
     COZYVTT_SMOKE=1 COZYVTT_URL=... COZYVTT_EMAIL=... COZYVTT_PASSWORD=... \
     COZYVTT_CAMPAIGN_ID=... .venv/bin/python scripts/smoke.py
 
-只登录一次（auth 限流 5次/15min/IP），全部通过退出码 0。
+Log in once (auth limit: 5 requests/15min/IP); exit 0 if all checks pass.
 """
 import os
 import sys
@@ -42,7 +42,7 @@ def valid_result(name, result, campaign_id):
 
 def main() -> int:
     if os.environ.get("COZYVTT_SMOKE") != "1":
-        print("需要 COZYVTT_SMOKE=1 显式开启")
+        print("Set COZYVTT_SMOKE=1 explicitly to enable this test")
         return 2
 
     base = os.environ["COZYVTT_URL"]
@@ -57,7 +57,7 @@ def main() -> int:
 
     class NoWS:
         def start(self):
-            raise AssertionError("只读冒烟不应连接 WS")
+            raise AssertionError("Read-only smoke tests must not connect to WS")
 
         def stop(self):
             pass
@@ -68,7 +68,7 @@ def main() -> int:
     tools = mcp.tools
 
     try:
-        # 只登录一次
+        # Log in once
         auth.login()
         print(f"[login] ok, user={auth.user.get('displayName') if auth.user else '?'}")
 
@@ -87,24 +87,24 @@ def main() -> int:
                 hint = ""
                 if name == "campaign_status":
                     c = data.get("campaign", {})
-                    hint = f"战役「{c.get('name')}」status={c.get('status')} map={c.get('currentMapId')}"
+                    hint = f"Campaign {c.get('name')} status={c.get('status')} map={c.get('currentMapId')}"
                 elif name == "map_list":
-                    hint = f"{len(data.get('maps', []))} 张图"
+                    hint = f"{len(data.get('maps', []))} maps"
                 elif name == "chat_read":
                     hint = f"total={data.get('pagination', {}).get('total')}"
                 elif name == "character_list":
-                    hint = f"roster={len(data.get('roster', []))} 人"
+                    hint = f"roster={len(data.get('roster', []))} members"
                 elif name == "creature_search":
                     hint = f"keys={list(data.keys())[:4]}"
                 print(f"[{name}] PASS {hint}")
             else:
                 failed += 1
-                print(f"[{name}] FAIL {r.get('error', '响应结构不符合契约')}")
+                print(f"[{name}] FAIL {r.get('error', 'Response structure does not match the contract')}")
 
         if failed:
-            print(f"\n{failed}/{len(checks)} 失败")
+            print(f"\n{failed}/{len(checks)} failed")
             return 1
-        print(f"\n全部 {len(checks)} 项只读冒烟通过")
+        print(f"\nAll {len(checks)} read-only smoke checks passed")
         return 0
     finally:
         ctx.close()

@@ -1,5 +1,5 @@
-"""cozyvtt-mcp 单测：auth 重试 / 429 退避 / 缓冲 seq 语义 / 工具返回结构。
-HTTP 层用 responses mock，WS 层用 fake socketio。"""
+"""cozyvtt-mcp tests: auth retry, 429 backoff, buffer seq semantics, and tool result envelopes.
+HTTP uses responses mocks; WS uses fake socketio."""
 import time
 
 import pytest
@@ -37,7 +37,7 @@ class FakeSIO:
         self.connected = False
         self.handlers["disconnect"]("server disconnect")
 
-    # 测试辅助：模拟服务端推送 / 重连
+    # Test helpers: simulate server pushes and reconnects
     def push(self, event, data):
         self.handlers[event](data)
 
@@ -60,7 +60,7 @@ def test_login_success():
     data = am.login()
     assert data["user"]["email"] == "dm@x.local"
     assert am.user["email"] == "dm@x.local"
-    # rememberMe 字段带上了
+    # The rememberMe field is included
     import json as _j
     assert _j.loads(resp_lib.calls[0].request.body)["rememberMe"] is True
 
@@ -72,7 +72,7 @@ def test_login_429_backoff_then_success():
     resp_lib.add(resp_lib.POST, f"{BASE}/api/auth/login", json={"user": {"email": "dm@x.local"}}, status=200)
     am = make_auth()
     am.login()
-    assert len(resp_lib.calls) == 4  # 3 次 429 + 第 4 次成功
+    assert len(resp_lib.calls) == 4  # Three 429s, then success on the fourth attempt
 
 
 @resp_lib.activate
@@ -82,7 +82,7 @@ def test_login_429_exhausted_raises():
     am = make_auth()
     with pytest.raises(AuthError):
         am.login()
-    assert len(resp_lib.calls) == 4  # 最多 backoff+1 次，不循环撞墙
+    assert len(resp_lib.calls) == 4  # At most backoff+1 attempts; no endless retry loop
 
 
 @resp_lib.activate
@@ -90,9 +90,9 @@ def test_relogin_min_interval_skip():
     resp_lib.add(resp_lib.POST, f"{BASE}/api/auth/login", json={"user": {}}, status=200)
     am = make_auth()
     am.login()
-    assert am.relogin() is False           # 距上次 <180s → 跳过
-    assert len(resp_lib.calls) == 1        # 没有第二次登录请求
-    am._next_login_ts -= 400               # 模拟过了 400s
+    assert am.relogin() is False           # Less than 180s since last login; skip
+    assert len(resp_lib.calls) == 1        # No second login request
+    am._next_login_ts -= 400               # Simulate 400s elapsed
     resp_lib.add(resp_lib.POST, f"{BASE}/api/auth/login", json={"user": {}}, status=200)
     assert am.relogin() is True
     assert len(resp_lib.calls) == 2
@@ -121,7 +121,7 @@ def test_client_429_backoff():
     am = make_auth()
     c = CozyClient(BASE, am, backoff=(1, 2, 4), sleep=sleeps.append)
     assert c.get("/api/y") == {"ok": 1}
-    assert sleeps == [1, 2]  # 指数退避序列
+    assert sleeps == [1, 2]  # Exponential backoff sequence
 
 
 @resp_lib.activate
@@ -134,7 +134,7 @@ def test_client_error_contains_upstream_message():
     assert "nope" in ei.value.message
 
 
-# ---------- ws 缓冲 ----------
+# ---------- WS buffer ----------
 
 def make_ws():
     ws = WSListener(BASE, CID, cookie_getter=lambda: "sid=abc", capacity=5, sio_factory=FakeSIO)
@@ -144,7 +144,7 @@ def make_ws():
 
 def test_ws_authenticate_on_connect():
     ws = make_ws()
-    # 新握手：等服务端 'connected' 事件后才发 authenticate（2026-09-04 修复竞态）
+    # Handshake: wait for server 'connected' before authenticate (race fixed 2026-09-04)
     assert ("authenticate", {"campaignId": CID}) not in ws.sio.emitted
     ws.sio.push("connected", {"userId": "u1"})
     assert ("authenticate", {"campaignId": CID}) in ws.sio.emitted
@@ -159,7 +159,7 @@ def test_ws_buffer_seq_and_poll():
     assert [e["seq"] for e in out["events"]] == [1, 2]
     assert out["events"][0]["event"] == "chat.message"
     assert out["latest_seq"] == 2
-    # 增量拉取
+    # Incremental polling
     ws.sio.push("map.changed", {"id": "m1"})
     out2 = ws.poll(since=2)
     assert [e["event"] for e in out2["events"]] == ["map.changed"]
@@ -168,11 +168,11 @@ def test_ws_buffer_seq_and_poll():
 
 def test_ws_ring_capacity_trim():
     ws = make_ws()
-    for i in range(8):  # 容量 5
+    for i in range(8):  # Capacity 5
         ws.sio.push("chat.message", {"i": i})
     out = ws.poll(since=0, limit=100)
     assert len(out["events"]) == 5
-    assert out["events"][0]["payload"]["i"] == 3  # 最老的被挤掉
+    assert out["events"][0]["payload"]["i"] == 3  # Oldest events were evicted
     assert out["latest_seq"] == 8
 
 
@@ -195,7 +195,7 @@ def test_ws_latest():
     assert ws.latest("session.ended") is None
 
 
-# ---------- 工具返回结构 ----------
+# ---------- Tool result envelopes ----------
 
 class FakeMCP:
     def __init__(self):
@@ -219,7 +219,7 @@ class StubClient:
         if path == "/health":
             return {"status": "ok"}
         if path == f"/api/campaigns/{CID}":
-            return {"campaign": {"id": CID, "name": "阿卡姆夜话", "status": "PREPARATION",
+            return {"campaign": {"id": CID, "name": "\u963f\u5361\u59c6\u591c\u8bdd", "status": "PREPARATION",
                                  "gameSystem": self.system, "userRole": "DM", "activeSession": {"id": "session-1"}}}
         for suffix, key in (("messages", "messages"), ("maps", "maps"),
                             ("characters", "roster"), ("creatures", "creatures")):
@@ -227,7 +227,7 @@ class StubClient:
                 return {key: []}
         if path == "/api/characters/c1/validate":
             return {"isValid": True}
-        raise AssertionError(f"未定义的 GET 契约: {path}")
+        raise AssertionError(f"Undefined GET contract: {path}")
 
     def post(self, path, payload=None, **kw):
         self.calls.append(("POST", path, payload))
@@ -237,7 +237,7 @@ class StubClient:
             return {"character": {"id": "c1", "campaignId": payload["campaignId"]}}
         if path == f"/api/campaigns/{CID}/sessions":
             return {"session": {"id": "session-1"}}
-        raise AssertionError(f"未定义的 POST 契约: {path}")
+        raise AssertionError(f"Undefined POST contract: {path}")
 
     def put(self, path, payload=None, **kw):
         self.calls.append(("PUT", path, payload))
@@ -290,7 +290,7 @@ def test_tools_ok_structure():
     assert r["ok"] is True and "data" in r
     r = tools["campaign_status"]()
     assert r["ok"] is True
-    assert r["data"]["campaign"]["name"] == "阿卡姆夜话"
+    assert r["data"]["campaign"]["name"] == "\u963f\u5361\u59c6\u591c\u8bdd"
 
 
 def test_tools_error_structure_never_raises():
@@ -303,9 +303,9 @@ def test_tools_error_structure_never_raises():
 def test_chat_send_and_session_rest():
     ws = StubWS()
     tools = build_tools(make_ctx(ws=ws))
-    r = tools["chat_send"](content="夜幕降临", type="DM")
+    r = tools["chat_send"](content="\u591c\u5e55\u964d\u4e34", type="DM")
     assert r["ok"] is True
-    assert ("chat.message", {"content": "夜幕降临", "type": "DM"}) in ws.emitted
+    assert ("chat.message", {"content": "\u591c\u5e55\u964d\u4e34", "type": "DM"}) in ws.emitted
     r = tools["session_manage"](action="start")
     assert r["ok"] is True
     assert r["data"]["session"]["id"] == "session-1"
@@ -322,14 +322,14 @@ def test_dice_roll_throttle_queues():
     tools["dice_roll"](expression="1d20")
     tools["dice_roll"](expression="2d6", is_secret=True)
     elapsed = time.time() - t0
-    assert elapsed >= tools_pkg.DICE_MIN_INTERVAL  # 第二次排队等待
+    assert elapsed >= tools_pkg.DICE_MIN_INTERVAL  # The second call waits in the queue
     assert ctx.ws.emitted[0] == ("dice.roll", {"expression": "1d20", "secret": False})
     assert ctx.ws.emitted[1] == ("dice.roll", {"expression": "2d6", "secret": True})
 
 
 def test_initiative_manage_validation():
     tools = build_tools(make_ctx())
-    assert tools["initiative_manage"](action="add")["ok"] is False  # 缺 token/map
+    assert tools["initiative_manage"](action="add")["ok"] is False  # Missing token/map
     assert tools["initiative_manage"](action="nope")["ok"] is False
     assert tools["initiative_manage"](action="next")["ok"] is True
 
@@ -343,7 +343,7 @@ def test_token_move_uses_rest_put():
             {"position": {"x": 3, "y": 4}}) in client.calls
 
 
-# ---- 系统门控（gameSystem 枚举裁剪工具面）----
+# ---- System gates (tool availability by gameSystem enum) ----
 
 def test_initiative_roll_gated_on_coc():
     tools = build_tools(make_ctx(client=StubClient(system="CALL_OF_CTHULHU_7E")))
@@ -362,19 +362,19 @@ def test_initiative_roll_allowed_on_5e():
 
 
 def test_initiative_roll_rejected_when_system_unset():
-    tools = build_tools(make_ctx())  # StubClient 默认 gameSystem=None（flexible）
+    tools = build_tools(make_ctx())  # StubClient defaults to gameSystem=None (flexible)
     r = tools["initiative_manage"](action="roll", token_id="t1", map_id="m1")
-    assert r["ok"] is False and "未设置" in r["error"]
+    assert r["ok"] is False and "unset" in r["error"]
 
 
 def test_initiative_set_and_reorder():
     ws = StubWS()
     tools = build_tools(make_ctx(ws=ws))
-    assert tools["initiative_manage"](action="set", token_id="t1")["ok"] is False  # 缺 value
+    assert tools["initiative_manage"](action="set", token_id="t1")["ok"] is False  # Missing value
     r = tools["initiative_manage"](action="set", token_id="t1", map_id="m1", value=15)
     assert r["ok"] is True
     assert ("initiative.set", {"tokenId": "t1", "mapId": "m1", "value": 15}) in ws.emitted
-    assert tools["initiative_manage"](action="reorder")["ok"] is False  # 缺列表
+    assert tools["initiative_manage"](action="reorder")["ok"] is False  # Missing list
     r = tools["initiative_manage"](action="reorder", ordered_token_ids=["t2", "t1"])
     assert r["ok"] is True
     assert ("initiative.reorder", {"orderedTokenIds": ["t2", "t1"]}) in ws.emitted
@@ -390,9 +390,9 @@ def test_creature_search_srd_allowed_on_5e_and_custom_open():
     client = StubClient(system="DND_5E")
     tools = build_tools(make_ctx(client=client))
     assert tools["creature_search"](search="goblin", source="srd")["ok"] is True
-    # custom 源不限系统（CoC 战役自建怪库）
+    # The custom source supports all systems (custom creatures in a CoC campaign)
     tools_coc = build_tools(make_ctx(client=StubClient(system="CALL_OF_CTHULHU_7E")))
-    assert tools_coc["creature_search"](search="深潜者", source="custom")["ok"] is True
+    assert tools_coc["creature_search"](search="\u6df1\u6f5c\u8005", source="custom")["ok"] is True
 
 
 def test_campaign_status_features_surface():
@@ -407,11 +407,11 @@ def test_campaign_status_features_surface():
 def test_character_create_and_validate():
     client = StubClient(system="CALL_OF_CTHULHU_7E")
     tools = build_tools(make_ctx(client=client))
-    r = tools["character_create"](name="调查员甲", data={"occupation": "医生"})
+    r = tools["character_create"](name="\u8c03\u67e5\u5458\u7532", data={"occupation": "\u533b\u751f"})
     assert r["ok"] is True
     assert ("POST", "/api/characters",
-            {"name": "调查员甲", "campaignId": CID,
-             "data": {"occupation": "医生"}}) in client.calls
+            {"name": "\u8c03\u67e5\u5458\u7532", "campaignId": CID,
+             "data": {"occupation": "\u533b\u751f"}}) in client.calls
     r = tools["character_validate"](character_id="c1")
     assert r["ok"] is True
     assert ("GET", "/api/characters/c1/validate", {}) in client.calls

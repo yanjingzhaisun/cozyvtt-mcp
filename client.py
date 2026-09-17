@@ -1,8 +1,8 @@
-"""cozyvtt-mcp — REST 封装。
+"""cozyvtt-mcp — REST wrapper.
 
-- 401：任一请求收到 401 → 重新登录一次并重试（只重试一次）
-- 429：指数退避 1s/2s/4s，最多 3 次，仍失败抛 ApiError
-- 所有错误以 ApiError(status, message) 抛出，message 含上游 message 字段
+- 401: re-log in and retry the request once.
+- 429: exponential backoff of 1s/2s/4s, at most three retries, then raise ApiError.
+- Raise ApiError(status, message) for all errors, preserving the upstream message.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ log = logging.getLogger("cozyvtt.client")
 
 
 class ApiError(Exception):
-    """上游 HTTP 错误。status=0 表示网络层错误。"""
+    """Upstream HTTP error. status=0 indicates a network error."""
 
     def __init__(self, status: int, message: str, details=None):
         self.status = status
@@ -24,7 +24,7 @@ class ApiError(Exception):
 
 
 class CozyClient:
-    """薄 REST 封装。auth 需提供线程安全的 .request() 与 .relogin()。"""
+    """Thin REST wrapper. auth must provide thread-safe .request() and .relogin()."""
 
     def __init__(self, base_url: str, auth, timeout: float = 15.0,
                  backoff=(1.0, 2.0, 4.0), sleep=time.sleep):
@@ -35,7 +35,7 @@ class CozyClient:
         self._sleep = sleep
         self.on_unauthorized = None
 
-    # ---- 内部 ----
+    # ---- Internal helpers ----
 
     def _extract_message(self, resp) -> str:
         try:
@@ -48,13 +48,13 @@ class CozyClient:
 
     def request(self, method: str, path: str, retry_401: bool = True,
                 raw: bool = False, **kwargs):
-        """处理 401/429；raw 按 Content-Type 返回文本或 bytes，保留 ETag/304。"""
+        """Handle 401/429; raw returns text or bytes by Content-Type and preserves ETag/304."""
         url = path if path.startswith("http") else f"{self.base_url}{path}"
         kwargs.setdefault("timeout", self.timeout)
 
         attempt_429 = 0
         retried_401 = False
-        # requests 编码 multipart 会读完文件；每次重试必须从原位置重新读。
+        # requests consumes files when encoding multipart; rewind to the initial position on each retry.
         streams = []
         files = kwargs.get("files") or {}
         for part in (files.values() if isinstance(files, dict) else (v for _, v in files)):
@@ -66,24 +66,24 @@ class CozyClient:
                 for stream, position in streams:
                     stream.seek(position)
                 resp = self.auth.request(method, url, **kwargs)
-            except Exception as e:  # 网络层错误
-                raise ApiError(0, f"{method} {path} 网络错误: {e}") from e
+            except Exception as e:  # Network error
+                raise ApiError(0, f"{method} {path} network error: {e}") from e
 
             if resp.status_code == 401 and self.on_unauthorized:
                 self.on_unauthorized()
             if resp.status_code == 401 and retry_401 and not retried_401:
                 retried_401 = True
-                log.info("收到 401，尝试重新登录后重试 %s %s", method, path)
+                log.info("Received 401; attempting re-login before retrying %s %s", method, path)
                 try:
                     self.auth.relogin()
                 except Exception as e:
-                    raise ApiError(401, f"重新登录失败: {e}") from e
+                    raise ApiError(401, f"Re-login failed: {e}") from e
                 continue
 
             if resp.status_code == 429 and attempt_429 < len(self.backoff):
                 delay = self.backoff[attempt_429]
                 attempt_429 += 1
-                log.warning("收到 429，第 %d 次退避 %.1fs %s %s", attempt_429, delay, method, path)
+                log.warning("Received 429; retry %d, backing off %.1fs %s %s", attempt_429, delay, method, path)
                 self._sleep(delay)
                 continue
 
@@ -110,7 +110,7 @@ class CozyClient:
             except ValueError:
                 return {"_raw": resp.text}
 
-    # ---- 便捷方法 ----
+    # ---- Convenience methods ----
 
     def get(self, path, **kw):
         return self.request("GET", path, **kw)
@@ -128,7 +128,7 @@ class CozyClient:
         return self.request("DELETE", path, **kw)
 
     def post_multipart(self, path, fields, files, **kw):
-        """交给 requests 生成 boundary；不要手工设置 Content-Type 或传 json。"""
+        """Let requests generate the boundary; do not set Content-Type manually or pass json."""
         return self.request("POST", path, data=fields, files=files, **kw)
 
     def get_raw(self, path, **kw):
@@ -136,7 +136,7 @@ class CozyClient:
 
 
 def requests_encoding(resp):
-    # requests 对无 charset 的 text/* 猜 ISO-8859-1；上游文档是 UTF-8。
+    # requests guesses ISO-8859-1 for text/* without charset; upstream documents use UTF-8.
     if "charset=" in resp.headers.get("Content-Type", "").lower():
         return resp.encoding or "utf-8"
     return "utf-8"

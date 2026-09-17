@@ -29,7 +29,7 @@ def error(data=None):
 def catchall(data=None):
     print(">> catchall:", data)
 
-# 常见可能事件名都挂上
+# Register handlers for commonly expected event names
 for ev in ("authenticated","error","auth.error","unauthorized","user.joined","campaign.state"):
     try: sio.on(ev, catchall)
     except Exception: pass

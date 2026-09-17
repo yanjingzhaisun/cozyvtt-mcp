@@ -1,4 +1,4 @@
-"""v0.2 双基线离线契约；responses/FakeSIO，禁止真实 TCP（conftest）。"""
+"""v0.2 dual-baseline offline contracts; responses/FakeSIO, with real TCP blocked by conftest."""
 import asyncio
 import inspect
 import io
@@ -80,8 +80,8 @@ def test_multipart_retries_rewind_file(status):
 
 @responses.activate
 @pytest.mark.parametrize("mime,body,expected", [
-    ("text/plain; charset=utf-8", "调查员".encode(), "调查员"),
-    ("text/markdown", "# 骰子".encode(), "# 骰子"),
+    ("text/plain; charset=utf-8", "\u8c03\u67e5\u5458".encode(), "\u8c03\u67e5\u5458"),
+    ("text/markdown", "# \u9ab0\u5b50".encode(), "# \u9ab0\u5b50"),
     ("application/pdf", b"%PDF-1.7\x00\xff", b"%PDF-1.7\x00\xff"),
     ("application/octet-stream", b"\xff\x00", b"\xff\x00"),
 ])
@@ -94,14 +94,14 @@ def test_raw_client_uses_content_type(mime, body, expected):
 @responses.activate
 def test_document_upload_fields_and_body(tmp_path):
     path = tmp_path / "rules.md"
-    path.write_text("# 原文", encoding="utf-8")
+    path.write_text("# \u539f\u6587", encoding="utf-8")
     responses.post(BASE + "/api/assets/upload", json={"asset": {"id": DOC}}, status=201)
-    out = build_tools(http_ctx())["document_upload"](str(path), scope="CAMPAIGN", name="规则", tags=["A", "B"])
+    out = build_tools(http_ctx())["document_upload"](str(path), scope="CAMPAIGN", name="\u89c4\u5219", tags=["A", "B"])
     assert out["ok"]
     body = responses.calls[0].request.body
     assert b'name="campaignId"' in body and CID.encode() in body
     assert b'name="tags"' in body and b"A,B" in body
-    assert b'filename="rules.md"' in body and "# 原文".encode() in body
+    assert b'filename="rules.md"' in body and "# \u539f\u6587".encode() in body
 
 
 DOCUMENT_CASES = [
@@ -133,7 +133,7 @@ def test_all_document_404_categories(tool, method, path, args, message, expected
     out = build_tools(http_ctx())[tool](**args)
     assert out == {"ok": False, "error": expected,
                    "data": {"status": 404, "upstream": {"error": "Not Found", "message": message}}}
-    assert len(responses.calls) == 1  # 不尝试替代端点/重复删除/重传
+    assert len(responses.calls) == 1  # Do not try alternative endpoints, repeat deletion, or re-upload
 
 
 @responses.activate
@@ -151,12 +151,12 @@ def test_document_text_pdf_and_304(tmp_path, monkeypatch):
     directory = tmp_path / "downloads"
     monkeypatch.setattr(document_tools, "DOWNLOAD_DIR", directory)
     url = BASE + f"/api/assets/documents/{DOC}"
-    responses.get(url, body="# 原文", headers={"Content-Type": "text/plain; charset=utf-8", "ETag": '"one"'})
+    responses.get(url, body="# \u539f\u6587", headers={"Content-Type": "text/plain; charset=utf-8", "ETag": '"one"'})
     pdf = b"%PDF-1.7\xff\x00original-bytes"
     responses.get(url, body=pdf, headers={"Content-Type": "application/pdf", "ETag": '"two"'})
     responses.get(url, status=304, headers={"ETag": '"two"'})
     tool = build_tools(http_ctx())["document_read"]
-    assert tool(DOC)["data"] == {"mime_type": "text/plain", "etag": '"one"', "content": "# 原文"}
+    assert tool(DOC)["data"] == {"mime_type": "text/plain", "etag": '"one"', "content": "# \u539f\u6587"}
     assert not directory.exists()
     out = tool(DOC)["data"]
     assert out == {"mime_type": "application/pdf", "etag": '"two"',
@@ -182,9 +182,9 @@ def test_document_create_update_share_unshare_and_delete_payloads():
     responses.delete(C + f"/documents/{DOC}", json={"message": "Document unshared"})
     responses.delete(BASE + f"/api/assets/{DOC}", json={"message": "Asset deleted successfully"})
     t = build_tools(http_ctx())
-    assert t["document_create"](" n ", "md", "# 正文", "CAMPAIGN", description=" d ")["ok"]
+    assert t["document_create"](" n ", "md", "# \u6b63\u6587", "CAMPAIGN", description=" d ")["ok"]
     assert json.loads(responses.calls[-1].request.body) == {
-        "name": "n", "format": "md", "content": "# 正文", "scope": "CAMPAIGN", "campaignId": CID, "description": "d"}
+        "name": "n", "format": "md", "content": "# \u6b63\u6587", "scope": "CAMPAIGN", "campaignId": CID, "description": "d"}
     assert t["document_update"](DOC, "")["ok"]
     assert json.loads(responses.calls[-1].request.body) == {"content": ""}
     assert t["document_share"](DOC)["ok"]
@@ -212,7 +212,7 @@ def test_document_scopes_and_admin_personal_filter(scope):
     assert params == expected
 
 
-@pytest.mark.parametrize("content", ["\x00", "\x7f", "界" * (900 * 1024 // 3 + 1)])
+@pytest.mark.parametrize("content", ["\x00", "\x7f", "\u754c" * (900 * 1024 // 3 + 1)])
 def test_typed_document_limits(content):
     c = StubClient()
     t = build_tools(make_ctx(client=c))
@@ -275,7 +275,7 @@ def test_transfer_and_owner_reclaim_same_endpoint(target):
     assert ctx.cached_role() is None
     assert ctx.get_system() == "CALL_OF_CTHULHU_7E"
     assert json.loads(responses.calls[1].request.body) == {"userId": target}
-    assert not ctx.ws.emitted  # 不伪造两个 membership role 写操作
+    assert not ctx.ws.emitted  # Do not simulate transfer with two membership role writes
 
 
 @pytest.mark.parametrize("system,allowed", [("DND_5E", True), (None, False),
@@ -288,7 +288,7 @@ def test_hitdice_only_system_gate_and_pending(system, allowed):
         assert out["data"]["note"] == E_PENDING
         assert out["data"]["confirmed"] is False and out["data"]["status"] == "pending"
         assert ctx.ws.emitted == [("character.hitdice.spend", {"characterId": "c1", "index": 0})]
-        assert len(ctx.client.calls) == 1  # 仅取系统，没有版本探测或 PUT 模拟扣数
+        assert len(ctx.client.calls) == 1  # Only fetch the system; no version probe or PUT to simulate spending
     else:
         assert not ctx.ws.emitted
 
@@ -365,8 +365,8 @@ def test_session_history_notes_and_end_payload():
     assert t["session_list"]()["data"] == history
     assert t["session_notes_update"]("s", "")["ok"]
     assert json.loads(responses.calls[-1].request.body) == {"notes": ""}
-    assert t["session_manage"]("end", notes="共享摘要", save_state=False)["ok"]
-    assert json.loads(responses.calls[-1].request.body) == {"notes": "共享摘要", "saveState": False}
+    assert t["session_manage"]("end", notes="\u5171\u4eab\u6458\u8981", save_state=False)["ok"]
+    assert json.loads(responses.calls[-1].request.body) == {"notes": "\u5171\u4eab\u6458\u8981", "saveState": False}
     assert not ctx.ws.emitted
 
 

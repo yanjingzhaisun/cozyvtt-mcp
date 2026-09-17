@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""手动写冒烟：独立测试战役、COZYVTT_SMOKE=1；验证聊天及公骰/暗骰广播。"""
+"""Manual write smoke test: use a separate test campaign and COZYVTT_SMOKE=1; verify chat and public/secret roll broadcasts."""
 import os
 import sys
 import time
@@ -13,7 +13,7 @@ from scripts.smoke import FakeMCP
 
 
 def matches_roll(payload, user_id, purpose, expression, secret):
-    """按上游 1.2.2 广播字段匹配，避免把别人的相同骰式当成自己的结果。"""
+    """Match upstream 1.2.2 broadcast fields to avoid confusing another user's identical expression with our roll."""
     return (isinstance(payload, dict) and bool(payload.get("id"))
             and payload.get("userId") == user_id and payload.get("purpose") == purpose
             and payload.get("expression") == expression and payload.get("secret") is secret)
@@ -23,60 +23,60 @@ def run_checks(ctx) -> int:
     ctx.ensure_ws()
     user_id = (ctx.auth.user or {}).get("id")
     if not user_id:
-        raise RuntimeError("登录响应没有 user.id，无法验证广播归属")
+        raise RuntimeError("Login response is missing user.id; cannot verify broadcast ownership")
     mcp = FakeMCP()
     register_all(mcp, lambda: ctx)
     tools = mcp.tools
     marker = f"smoke-{uuid4()}"
     cursor = ctx.ws.poll()["high_water_seq"]
-    chat = tools["chat_send"](content=f"[冒烟] {marker}", type="DM")
+    chat = tools["chat_send"](content=f"[smoke] {marker}", type="DM")
     rolls = {}
     for secret in (False, True):
         purpose = f"{marker}-{secret}"
         rolls[secret] = tools["dice_roll"]("1d20+3", is_secret=secret, purpose=purpose)
     if not chat["ok"] or not all(r["ok"] for r in rolls.values()):
-        print("发送失败:", chat, rolls)
+        print("Dispatch failed:", chat, rolls)
         return 1
-    print("聊天、公骰、暗骰已发送，等待业务广播确认（pending）")
+    print("Chat, public roll, and secret roll sent; awaiting business broadcasts (pending)")
     found_chat = False
     found_rolls = set()
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         out = tools["events_poll"](since=cursor, limit=200)
         if not out["ok"]:
-            print("轮询失败:", out)
+            print("Polling failed:", out)
             return 1
         batch = out["data"]
         if batch["gap"] or batch["cursor_reset"]:
-            print("事件存在缺口，无法证明本次冒烟成功")
+            print("Event gap detected; cannot confirm smoke test success")
             return 1
         cursor = batch["next_seq"]
         for event in batch["events"]:
             payload = event["payload"]
             if event["event"] == "system.error":
-                print("WS 错误:", payload)
+                print("WS error:", payload)
                 return 1
             if (event["event"] == "chat.message" and isinstance(payload, dict)
                     and payload.get("userId") == user_id
-                    and payload.get("content") == f"[冒烟] {marker}"):
+                    and payload.get("content") == f"[smoke] {marker}"):
                 found_chat = True
             if event["event"] == "dice.rolled":
                 for secret in (False, True):
                     if matches_roll(payload, user_id, f"{marker}-{secret}", "1d20+3", secret):
                         found_rolls.add(secret)
         if found_chat and len(found_rolls) == 2:
-            print("PASS：收到自己的聊天、公骰和标记为 secret 的暗骰")
-            # TODO(#25): 单个 DM 连接不能证明玩家未收到暗骰；端到端隐私验收
-            # 需要独立 PLAYER 账号/连接。离线契约测试验证 secret 字段与广播分支。
+            print("PASS: received our chat, public roll, and roll marked secret")
+            # TODO(#25): A single DM connection cannot prove players did not receive secret rolls; end-to-end privacy verification
+            # requires a separate PLAYER account/connection. Offline contracts check the secret field and broadcast branch.
             return 0
         time.sleep(0.1)
-    print("FAIL：未完整收到自己的聊天、公骰和暗骰")
+    print("FAIL: did not receive all of our chat, public roll, and secret roll")
     return 1
 
 
 def main() -> int:
     if os.environ.get("COZYVTT_SMOKE") != "1":
-        print("需要 COZYVTT_SMOKE=1 显式开启，只用于测试战役")
+        print("Set COZYVTT_SMOKE=1 explicitly; use only a test campaign")
         return 2
     ctx = Ctx.from_env()
     try:

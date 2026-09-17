@@ -1,4 +1,4 @@
-"""只读工具：campaign_status / chat_read / events_poll / map_list /
+"""Read tools: campaign_status / chat_read / events_poll / map_list /
 initiative_state / character_list / character_get / character_validate / creature_search"""
 from __future__ import annotations
 
@@ -10,14 +10,14 @@ def register(mcp, get_ctx) -> None:
     @mcp.tool
     @wrap
     def campaign_status() -> dict:
-        """实例健康 + 战役状态 + 当前地图。健康检查用 GET /health（200 即活）。"""
+        """Get instance health, campaign status, and current map. GET /health returning 200 indicates reachability."""
         ctx = get_ctx()
         health = {"reachable": False}
         try:
             h = ctx.client.get("/health")
             health = {"reachable": True, "detail": h if isinstance(h, dict) else {}}
         except Exception:
-            # /health 可能被前端 SPA 兜底接管；能拿到 200 就算活
+            # The frontend SPA may handle /health; a 200 response still indicates reachability
             try:
                 ctx.client.get("/api/auth/ping")
                 health = {"reachable": True, "detail": {"via": "/api/auth/ping"}}
@@ -32,11 +32,11 @@ def register(mcp, get_ctx) -> None:
             except Exception:
                 pass
         system = camp.get("gameSystem")
-        # 系统门控特性面：哪些能力在当前战役系统下可用（门控明细见各工具 docstring）
+        # Report features allowed by the campaign system; see tool docstrings for individual gates
         features = {
-            "srd_creature_library": system == SYSTEM_DND5E,  # Open5e 数据源仅 5e
+            "srd_creature_library": system == SYSTEM_DND5E,  # Open5e provides 5e content only
             "homebrew_creature_library": True,
-            "initiative_roll": system in INITIATIVE_ROLL_SYSTEMS,  # CoC7e 为 DEX 排序不骰
+            "initiative_roll": system in INITIATIVE_ROLL_SYSTEMS,  # CoC7e sorts by DEX without rolling
             "documents": "unknown",
             "saved_rolls": "unknown",
             "dm_transfer": "unknown",
@@ -47,8 +47,8 @@ def register(mcp, get_ctx) -> None:
             "campaign": {k: camp.get(k) for k in
                          ("id", "name", "status", "gameSystem", "currentMapId", "description", "ownerId")},
             "features": features,
-            "feature_evidence": {"new_api": "未探测新端点；unknown 不代表已支持",
-                                 "hitdice_spend": "仅 DND_5E 通过系统门；WS 无可靠能力探测"},
+            "feature_evidence": {"new_api": "New endpoints have not been probed; unknown does not mean supported",
+                                 "hitdice_spend": "Only DND_5E passes the system gate; WS has no reliable capability probe"},
             "role": ctx.role_from_campaign(camp),
             "owner": {"id": camp.get("ownerId"),
                       "is_me": camp["ownerId"] == (ctx.auth.user or {}).get("id") if camp.get("ownerId") else None},
@@ -59,12 +59,12 @@ def register(mcp, get_ctx) -> None:
     @mcp.tool
     @wrap
     def chat_read(limit: int = 20, cursor: str | None = None) -> dict:
-        """最新消息；下一页原样传 pagination.nextCursor。v0.2 移除 offset。
-        无 nextCursor 的旧实例只读最新页；DICE_ROLL 不入聊天史，骰史看 events_poll。"""
+        """Read the latest messages; pass pagination.nextCursor unchanged for the next page. v0.2 removes offset.
+        Older instances without nextCursor support only the latest page. DICE_ROLL is excluded; use events_poll for dice history."""
         if type(limit) is not int or not 1 <= limit <= 100:
-            raise ValueError("limit 必须在 1..100")
+            raise ValueError("limit must be in 1..100")
         if cursor is not None and (not isinstance(cursor, str) or not cursor):
-            raise ValueError("cursor 必须为非空字符串或 null")
+            raise ValueError("cursor must be a nonempty string or null")
         ctx = get_ctx()
         if cursor is not None and ctx._cursor_supported is False:
             raise ValueError(E_CURSOR)
@@ -82,9 +82,9 @@ def register(mcp, get_ctx) -> None:
     @mcp.tool
     @wrap
     def events_poll(since: int = 0, limit: int = 100) -> dict:
-        """拉取 seq > since 的实时事件（玩家发言/骰子/移动），含骰史。
-        返回 events/next_seq/high_water_seq/gap；以 next_seq 作为下次 since。
-        latest_seq 为 next_seq 的兼容别名；gap 表示缓冲淘汰，cursor_reset 表示游标超出当前进程。"""
+        """Read events with seq > since, including player messages, dice rolls, and movement.
+        Returns events/next_seq/high_water_seq/gap; use next_seq as the next since.
+        latest_seq aliases next_seq; gap indicates evicted events, and cursor_reset indicates a cursor beyond this process."""
         ctx = get_ctx()
         connection_error = None
         try:
@@ -102,67 +102,67 @@ def register(mcp, get_ctx) -> None:
     @mcp.tool
     @wrap
     def map_list() -> dict:
-        """地图列表。"""
+        """List campaign maps."""
         ctx = get_ctx()
         return ctx.client.get(f"/api/campaigns/{ctx.campaign_id}/maps")
 
     @mcp.tool
     @wrap
     def initiative_state(refresh: bool = True) -> dict:
-        """默认请求最新 initiative.state；refresh=false 读缓存，超时为未知。"""
+        """Request fresh initiative.state by default; refresh=false reads the cache. A timeout means unknown state."""
         ctx = get_ctx()
         ctx.ensure_ws()
         rec = ctx.ws.latest("initiative.state")
         if not ctx.ws.authenticated:
-            return {"state": None, "note": "WS 尚未认证，先攻状态不可用"}
+            return {"state": None, "note": "WS is not authenticated; initiative state is unavailable"}
         if refresh:
             receipt = ctx.ws.emit("initiative.request_state", {})
             rec = ctx.ws.wait_for_event("initiative.state", receipt["since"])
         if not rec:
-            return {"state": None, "stale": True, "note": "先攻状态未知：未收到最新 initiative.state，请读取 events_poll"}
+            return {"state": None, "stale": True, "note": "Initiative state is unknown: no fresh initiative.state received. Read events_poll."}
         return {"state": rec["payload"], "seq": rec["seq"], "ts": rec["ts"], "stale": not refresh}
 
     @mcp.tool
     @wrap
     def character_list() -> dict:
-        """角色列表（战役 roster）。"""
+        """List characters in the campaign roster."""
         ctx = get_ctx()
         return ctx.client.get(f"/api/campaigns/{ctx.campaign_id}/characters")
 
     @mcp.tool
     @wrap
     def character_get(character_id: str) -> dict:
-        """读卡全量，保留未知字段；以角色自身 gameSystem 为准。
-        CoC conditions/appearance/spellsAndMythos/notes 与 DND hitDice 均原样保留。
-        Keeper notes 是普通 data.notes，并非 DM 私密字段。"""
+        """Read the full character sheet, preserving unknown fields; use the character's own gameSystem.
+        Preserve CoC conditions/appearance/spellsAndMythos/notes and DND hitDice unchanged.
+        Keeper notes are ordinary data.notes, not private DM fields."""
         ctx = get_ctx()
         return ctx.client.get(f"/api/characters/{character_id}")
 
     @mcp.tool
     @wrap
     def character_validate(character_id: str) -> dict:
-        """仅 owner 可调用。保留上游结果，但 validation_reliable 固定 false。
-        v1.4 忽略校验失败结果，不能凭 isValid=true 判定合法；旧版可靠性未知。"""
+        """Owner only. Preserve upstream results, but always set validation_reliable=false.
+        v1.4 ignores validation failures, so isValid=true does not prove validity; older versions have unknown reliability."""
         ctx = get_ctx()
         result = ctx.client.get(f"/api/characters/{character_id}/validate")
         return {**result, "validation_reliable": False,
-                "validation_note": "上游 v1.4 校验路由忽略 validation.success=false，可能误报 isValid=true；旧版可靠性未知。"}
+                "validation_note": "The upstream v1.4 validation route ignores validation.success=false and may incorrectly report isValid=true; reliability on older versions is unknown."}
 
     @mcp.tool
     @wrap
     def creature_search(search: str = "", source: str = "", cr: str = "",
                         limit: int = 20, offset: int = 0) -> dict:
-        """Open5e SRD + 战役自定义怪库检索。source: srd|custom。
-        系统门：source=srd 仅 DND_5E 战役（Open5e 是 D&D 5e 数据源）；custom 不限系统。"""
+        """Search Open5e SRD and campaign custom creatures. source: srd|custom.
+        source=srd requires DND_5E (Open5e is a D&D 5e source); custom supports all systems."""
         ctx = get_ctx()
         params = {"limit": min(limit, 100), "offset": offset}
         if search:
             params["search"] = search
         source = source.strip().lower()
         if source not in {"", "srd", "custom"}:
-            raise ValueError("source 只能为 srd / custom 或空字符串")
+            raise ValueError("source must be srd, custom, or an empty string")
         if source == "srd":
-            require_system(ctx, (SYSTEM_DND5E,), "SRD 怪库（Open5e 为 D&D 5e 数据源）")
+            require_system(ctx, (SYSTEM_DND5E,), "SRD creature library (Open5e provides D&D 5e content)")
         elif not source and ctx.get_system() != SYSTEM_DND5E:
             source = "custom"
         if source:
