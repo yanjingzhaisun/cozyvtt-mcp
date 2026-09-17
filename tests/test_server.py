@@ -96,7 +96,7 @@ def test_stdio_list_and_validation_without_live_campaign(tmp_path):
         )
         async with Client(transport) as client:
             tools = await client.list_tools()
-            assert len(tools) == 20
+            assert len(tools) == 37
             invalid = await client.call_tool("token_move", {}, raise_on_error=False)
             assert invalid.is_error
             missing_env = await client.call_tool("chat_read", {})

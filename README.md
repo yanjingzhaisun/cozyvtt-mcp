@@ -8,20 +8,35 @@ Built for and tested with [Hermes Agent](https://github.com/NousResearch/hermes-
 
 | cozyvtt-mcp | CozyVTT | Notes |
 |---|---|---|
-| 0.1.1 | **v1.2.2** | Critical-bugfix patch following Codex review; still pinned to CozyVTT v1.2.2 |
+| **0.2.0** | **v1.2.2 / v1.4.0** | Dual baseline: retain original tools; new REST routes degrade explicitly on old instances. Offline contract tests; no v1.4.0 live smoke performed. |
+| 0.1.1 | v1.2.2 | Previous 20-tool release |
 
-> **API stability warning.** The CozyVTT author has stated the REST/WS API is *subject to change* — v1.3.0 ships a large amount of changes (see [CozyVTT#32](https://github.com/CheekyChinchilla/CozyVTT/issues/32)). There are no compatibility promises yet. This bridge tracks the upstream changelog and pins its compatibility table per release. If your instance runs a newer CozyVTT, expect to adjust.
+The compatibility table describes supported contracts, not an inferred server version. New feature availability is `unknown` until established; an empty list or a business 404 is not evidence that the route is missing. See [SPEC v2](SPEC.md) for the complete 37-tool contract.
+
+## v0.2.0 changes and migration
+
+- **17 new tools**: Documents (9), Saved Rolls (4), DM transfer/reclaim (1), Hit Dice spend (1), session history/notes (2). `saved_roll_list` already returns complete macros; there is no `saved_roll_get`.
+- **Breaking change — `chat_read`**: remove `offset`. Call `chat_read(limit=20)` first, then pass the returned `pagination.nextCursor` as `cursor`. Messages and pagination pass through unchanged. If `nextCursor` is null, stop. Old instances without cursor metadata support only the latest page; history requests return `此实例不支持可靠的历史游标分页；仅可读取最新一页。` instead of repeating it.
+- Raw document reads preserve MIME type and ETag. Text returns `{mime_type,etag,content}`; PDFs are saved to project `downloads/<document_id>.pdf` and return `{mime_type,etag,file_path,file_size}`. Pass `etag` for `If-None-Match`; 304 returns `{not_modified:true}` for the caller to reuse existing content. Downloads are Git-ignored; upstream deletion does not remove local copies.
+- REST 401 invalidates existing WS authentication and campaign caches. New events include `character.updated`, `campaign.dm.transferred`, `roster.updated`, and `dice.historyCleared`. DM transfer clears role/system caches; losing membership cancels WS authentication.
+- `character_validate` always includes `validation_reliable:false`: upstream v1.4.0 can discard validation failures and incorrectly report `isValid:true`; reliability on older servers is unknown.
+- Token sizes are integers 1..10; `token_move` rejects spectators. Map switching reports REST persistence separately from WS broadcast dispatch. `initiative_state(refresh=true)` requests fresh state and reports unknown on timeout.
+
+REST route-missing 404 with the exact upstream message `The requested resource does not exist` returns `当前 CozyVTT 实例未提供此功能；请升级到支持该功能的版本后重试。`. Other 404s return `资源不存在或当前账号无权访问（HTTP 404）：<upstream message>`. Error `data` preserves status and upstream details. Uploading DOCUMENT to an old upload route may return 400; that error is preserved without retrying with a different type or scope.
 
 ## Features
 
-20 tools returning `{ok, data?, error?}` for tool-body results. MCP argument validation remains handled by FastMCP:
+37 tools returning `{ok, data?, error?}` for tool-body results. MCP argument validation remains handled by FastMCP:
 
-- **Session/campaign**: `campaign_status` (incl. per-system feature surface), `session_manage`, `map_list`, `map_switch`
+- **Session/campaign**: `campaign_status` (role and owner reported separately; new capability keys may be `unknown`), `session_manage`, `session_list`, `session_notes_update`, `campaign_transfer_dm` (owner reclaim uses the same tool), `map_list`, `map_switch`
 - **Narration**: `chat_send` (DM / PLAYER), `chat_read`
 - **Dice**: `dice_roll` (server-side true random; `is_secret=true` (wire field: `secret`) for DM-only rolls, auditable via server logs), `events_poll` (incl. dice history — DICE_ROLL events are *not* in chat history)
 - **Tokens/maps**: `token_add`, `token_move`, `token_hp`, `token_place_creature`, `creature_search` (SRD + custom library)
 - **Combat**: `initiative_manage` (add / remove / **roll** / **set** / **reorder** / start / next / end), `initiative_state` (note: CoC7e initiative is DEX-ordered, no roll — this is upstream rules behavior, and `roll` is gated accordingly)
 - **Characters**: `character_list`, `character_get`, `character_create`, `character_validate`, `character_update` (rules math is done by the agent; the bridge just writes values)
+- **Documents**: `document_upload`, `document_create`, `document_list`, `campaign_document_list`, `document_read`, `document_update`, `document_share`, `document_unshare`, `document_delete`
+- **Saved Rolls**: `saved_roll_list`, `saved_roll_create`, `saved_roll_update`, `saved_roll_delete` (private to the current user and campaign; 50 macros per user/campaign, server-validated expressions)
+- **Hit Dice**: `character_hitdice_spend` (DND_5E only; dispatches one spend without rolling dice or healing)
 
 ## System gating
 
@@ -31,6 +46,7 @@ The bridge stays game-system agnostic, but a few capabilities only make sense un
 |---|---|---|
 | `creature_search source=srd` | `DND_5E` | The SRD library is seeded from Open5e — a D&D 5e data source |
 | `initiative_manage action=roll` | `DND_5E`, `PATHFINDER_2E`, `SHADOWRUN_6E` | The server derives the initiative dice per system; CoC7e doesn't roll at all (DEX order) |
+| `character_hitdice_spend` | `DND_5E` | Only the system gate is enforced locally. No reliable WS capability probe exists; dispatch always remains pending. |
 
 Gated calls return a clear `{ok: false, error}` explaining which systems are allowed, instead of emitting an event the server would ignore or misinterpret. Campaigns with no `gameSystem` set (flexible) fail closed. With no `source` specified, non-5e campaigns search only `custom`; 5e campaigns may search both sources. `campaign_status().features` reports the current campaign's available gated capabilities.
 
@@ -42,28 +58,29 @@ MCP client (stdio)
       ├─ auth.py        — rememberMe login, 10-min keepalive, 3-min re-login spacing, 429 backoff
       ├─ client.py      — REST wrapper: one 401→re-login→retry, 429 exponential backoff (1/2/4s, ≤3)
       ├─ ws_listener.py — socket.io listener, 500-event ring buffer, one reconnect worker
-      └─ tools/         — the 20 MCP tools
+      └─ tools/         — 37 MCP tools (read/write, documents, campaign additions)
 ```
 
 Design notes:
 
 - **Dice discipline**: the agent never touches random numbers. All rolls are generated server-side, visible to the table, and persisted. Secret rolls are DM-only but auditable after the session.
 - **Rules live outside the bridge**: skill checks, SAN loss, damage — computed by the agent/GM, the bridge only performs authoritative rolls and writes results. The bridge is game-system agnostic.
-- `token_move` uses the documented REST PUT (server broadcasts `map.changed` over WS), not the undocumented drag-stream WS protocol.
+- `token_move` uses REST PUT; the server checks DM/controlledBy permissions, and the bridge additionally rejects spectators. REST persistence does not imply a `map.changed` broadcast. `map_switch` saves through REST then explicitly dispatches `map.change` through WS; a WS failure preserves the successful REST result and never replays it.
 
 ## Result and update contracts
 
-- `dice_roll`, `chat_send`, `token_hp`, and `initiative_manage` return `sent: true`, `confirmed: false`, `status: "pending"`. This confirms dispatch only. Read business broadcasts and `system.error` with `events_poll`; do not blindly replay writes. CozyVTT 1.2.2 does not provide correlated business ACKs. Dice can carry an optional `purpose` string to identify a result.
+- `dice_roll`, `chat_send`, `token_hp`, `initiative_manage`, and `character_hitdice_spend` return `sent: true`, `confirmed: false`, `status: "pending"`. Read business broadcasts and `system.error` with `events_poll`; do not blindly replay writes. Neither baseline provides correlated business ACKs. Dice may carry `purpose` and `character_name` (wire: `characterName`) for Custom Roll display. Hit Dice spend, rolling, and healing are separate operations, not a transaction; an old server may silently ignore the spend event.
 - `events_poll` returns the oldest unread events first. Save `next_seq` for the next `since`; `latest_seq` is its compatibility alias. `high_water_seq` is the buffer high-water mark, not a pagination cursor. Check `gap`, `cursor_reset`, `has_more`, `connected`, and `authenticated`.
 - `character_update(character_id, data={"data": {"hp": {"current": 5}}})` recursively merges sheet fields before PUT. Unspecified fields survive; arrays/scalars replace values and `null` is explicit. Top-level fields are `name`, `data`, and `tokenImageUrl`. A process lock serializes updates from this bridge; concurrent browser saves still need upstream optimistic locking.
-- `character_create` creates the card and then assigns it to the roster. If assignment fails, the error includes the created character ID: assign that card in the UI instead of creating another.
-- `session_manage` uses REST. Pause/end resolve `campaign.activeSession.id`; start creates a session.
+- `character_create` creates the card, checks the roster, then assigns it only if not confirmed as assigned. If assignment fails, the error includes the created character ID: assign that card in the UI instead of creating another. CoC conditions/Mythos/spells/appearance/notes and DND legacy/new hit-dice fields survive character merges; Keeper notes are not private from campaign members.
+- `session_manage` uses REST. Pause/end resolve `campaign.activeSession.id`; start creates a session. End accepts `notes` (≤2000 characters, shared with the campaign) and `save_state=true`. Empty end notes do not clear old notes; use `session_notes_update(session_id,notes="")` to clear. `session_list` includes active sessions among the most recent 50.
+- Documents use scope `USER` (personal), `CAMPAIGN`, or `GLOBAL`. `document_list` filters the asset library; `campaign_document_list` discovers shared private documents too. Typed txt/md create/update is limited to 900 KiB UTF-8; file uploads use the instance limit (default 50 MiB). PDF content cannot be edited. Unsharing removes only one link and cannot revoke native/global access; `shared:false` indicates a native campaign document. Deleting removes the asset and all its links.
 - WS reconnects use fresh, URL-scoped Cookies and request current initiative state after campaign authentication. Use HTTPS for remote deployments.
 
 ## Requirements
 
 - Python ≥ 3.11
-- A running CozyVTT instance (tested: v1.2.2) and a campaign where your account is **DM**
+- A CozyVTT v1.2.2 or v1.4.0 instance and a campaign where your account has the permissions required by the tools
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 
 ## Install
@@ -108,7 +125,7 @@ Any stdio-capable client: command = the venv python, args = `server.py`, env as 
 ## Testing
 
 ```bash
-uv run pytest
+.venv/bin/python -m pytest
 ```
 
 Read-only smoke test against a live instance:
@@ -120,7 +137,7 @@ COZYVTT_SMOKE=1 COZYVTT_URL=... COZYVTT_EMAIL=... COZYVTT_PASSWORD=... \
 
 (`scripts/smoke_write.py` writes chat, a public roll, and a secret roll — run it manually and only on a throwaway campaign. It checks sender and unique purpose; proving that players do not receive secret rolls additionally requires an independent player connection.)
 
-Offline tests block TCP connections and include real FastMCP in-memory and stdio checks; they do not require campaign credentials.
+Offline tests block TCP connections and include real FastMCP in-memory and stdio checks; they do not require campaign credentials. The existing local venv used for v0.2.0 verification runs Python 3.12.13; Python 3.13 and live v1.4.0 integration remain unverified.
 
 ## Troubleshooting
 

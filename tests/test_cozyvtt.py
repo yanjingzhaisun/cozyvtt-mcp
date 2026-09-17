@@ -220,7 +220,7 @@ class StubClient:
             return {"status": "ok"}
         if path == f"/api/campaigns/{CID}":
             return {"campaign": {"id": CID, "name": "阿卡姆夜话", "status": "PREPARATION",
-                                 "gameSystem": self.system, "activeSession": {"id": "session-1"}}}
+                                 "gameSystem": self.system, "userRole": "DM", "activeSession": {"id": "session-1"}}}
         for suffix, key in (("messages", "messages"), ("maps", "maps"),
                             ("characters", "roster"), ("creatures", "creatures")):
             if path == f"/api/campaigns/{CID}/{suffix}":

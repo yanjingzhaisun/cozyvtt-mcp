@@ -2,7 +2,7 @@
 __pycache__/
 .pytest_cache/
 logs/
+downloads/
 *.pyc
 # internal design docs (not public)
-SPEC.md
 docs/

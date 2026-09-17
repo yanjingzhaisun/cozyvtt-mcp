@@ -13,6 +13,7 @@ LISTEN_EVENTS = [
     "chat.message", "dice.rolled", "dice.rolled.secret", "map.changed",
     "token.moved", "initiative.state", "session.started", "session.paused",
     "session.ended", "session.resumed", "character.hp.updated",
+    "character.updated", "campaign.dm.transferred", "roster.updated", "dice.historyCleared",
 ]
 
 
@@ -38,6 +39,9 @@ class WSListener:
         self._seq = 0
         self._generation = 0
         self._ever_authenticated = False
+        self.role = None
+        self.user_id = None
+        self.on_context_invalidated = None
         self.authenticated = False
         self.last_error: str | None = None
         self._refresh_needed = False
@@ -82,6 +86,8 @@ class WSListener:
                     or data.get("campaignId") != self.campaign_id):
                 return
             self.authenticated = True
+            self.role = data.get("role")
+            self.user_id = data.get("userId")
             self.last_error = self._auth_error = None
             self._refresh_needed = False
             if self._ever_authenticated:
@@ -92,6 +98,9 @@ class WSListener:
 
         def on_disconnect(reason=None):
             self.authenticated = False
+            self.role = None
+            if self.on_context_invalidated:
+                self.on_context_invalidated()
             self._failed = True
             self._append("system.disconnected", {"reason": str(reason)})
             self._state.notify_all()
@@ -99,8 +108,13 @@ class WSListener:
         def on_error(data=None):
             self.last_error = str(data)
             self._append("system.error", {"detail": data, "generation": generation})
-            if not self.authenticated or "unauthorized" in self.last_error.lower():
+            invalid = any(s in self.last_error.lower() for s in
+                          ("unauthorized", "no longer a member", "not a member"))
+            if not self.authenticated or invalid:
                 self.authenticated = False
+                self.role = None
+                if self.on_context_invalidated:
+                    self.on_context_invalidated()
                 self._auth_error = self.last_error
                 self._failed = True
                 self._refresh_needed = "unauthorized" in self.last_error.lower()
@@ -113,6 +127,15 @@ class WSListener:
         for event in LISTEN_EVENTS:
             def handler(data=None, event=event):
                 self._append(event, data)
+                if event == "campaign.dm.transferred":
+                    if isinstance(data, dict) and self.user_id:
+                        if data.get("newDmId") == self.user_id:
+                            self.role = "DM"
+                        elif data.get("previousDmId") == self.user_id:
+                            self.role = "PLAYER"
+                    if self.on_context_invalidated:
+                        self.on_context_invalidated()
+                self._state.notify_all()
             sio.on(event, guarded(handler))
 
     def _append(self, event: str, payload) -> dict:
@@ -140,7 +163,8 @@ class WSListener:
                       "has_more": next_seq < self._seq}
         with self._state:
             result.update(connected=self.connected, authenticated=self.authenticated,
-                          last_error=self.last_error)
+                          last_error=self.last_error, role=self.role,
+                          stale=not self.authenticated)
         return result
 
     def latest(self, event: str):
@@ -170,6 +194,30 @@ class WSListener:
                 self._state.wait(remaining)
             if not (self.authenticated and self.connected):
                 raise RuntimeError(f"WS 尚未认证，后台将重试: {self.last_error or '连接超时'}")
+
+    def invalidate_auth(self, reason: str) -> None:
+        with self._state:
+            self.authenticated = False
+            self.role = None
+            self._failed = True
+            self.last_error = self._auth_error = reason
+            self._refresh_needed = True
+            self._append("system.error", {"detail": reason, "phase": "rest-auth"})
+            self._state.notify_all()
+
+    def wait_for_event(self, event: str, since: int, timeout: float = 2.0):
+        """等待当前连接上序号更新的事件；仅用于读请求，不将广播当写 ACK。"""
+        deadline = time.monotonic() + timeout
+        with self._state:
+            while self.authenticated and self.connected:
+                rec = self.latest(event)
+                if rec and rec["seq"] > since:
+                    return rec
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._state.wait(remaining)
+        return None
 
     def _run(self) -> None:
         attempt = 0

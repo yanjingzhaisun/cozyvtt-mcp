@@ -104,11 +104,12 @@ def test_session_no_active_session_never_writes():
 @pytest.mark.parametrize("assign_status", [200, 403, 500])
 def test_create_assign_and_partial_failure(assign_status):
     responses.post(f"{BASE}/api/characters", json={"character": {"id": "new-card"}}, status=201)
+    responses.get(f"{BASE}/api/campaigns/{CID}/characters", json={"roster": []})
     responses.post(f"{BASE}/api/characters/new-card/assign", json={"message": "assignment"}, status=assign_status)
     out = build_tools(http_ctx())["character_create"]("New")
     assert out["ok"] is (assign_status == 200)
-    assert json.loads(responses.calls[1].request.body) == {"campaignId": CID}
-    assert len(responses.calls) == 2
+    assert json.loads(responses.calls[2].request.body) == {"campaignId": CID}
+    assert len(responses.calls) == 3
     if assign_status != 200:
         assert out["data"]["created"] and not out["data"]["assigned"]
         assert out["data"]["character"]["id"] == "new-card"
@@ -337,7 +338,7 @@ def test_real_fastmcp_schema_and_result():
         register_all(mcp, lambda: ctx)
         async with Client(mcp) as client:
             listed = await client.list_tools()
-            assert len(listed) == 20
+            assert len(listed) == 37
             dice = next(t for t in listed if t.name == "dice_roll")
             assert "is_secret" in dice.input_schema["properties"]
             result = await client.call_tool("dice_roll", {"expression": "1d20", "is_secret": True})

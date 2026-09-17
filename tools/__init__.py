@@ -22,6 +22,11 @@ SYSTEM_COC7E = "CALL_OF_CTHULHU_7E"
 KNOWN_SYSTEMS = (SYSTEM_DND5E, SYSTEM_PF2E, SYSTEM_SR6, SYSTEM_COC7E)
 # 服务器端 initiative.roll 有实际骰子行为的系统（CoC7e 不骰，DEX 排序）
 INITIATIVE_ROLL_SYSTEMS = (SYSTEM_DND5E, SYSTEM_PF2E, SYSTEM_SR6)
+HITDICE_SYSTEMS = (SYSTEM_DND5E,)
+E_OLD = "当前 CozyVTT 实例未提供此功能；请升级到支持该功能的版本后重试。"
+E_RESOURCE = "资源不存在或当前账号无权访问（HTTP 404）："
+E_PENDING = "操作已发送，结果尚未确认；请读取事件或状态，勿重复执行。"
+E_CURSOR = "此实例不支持可靠的历史游标分页；仅可读取最新一页。"
 
 _SYSTEM_UNSET = object()  # get_system 缓存哨兵（None 也是合法值：flexible 战役）
 
@@ -49,6 +54,16 @@ class Ctx:
         self._dice_lock = threading.Lock()
         self._last_dice_ts = 0.0
         self._character_lock = threading.Lock()
+        self._saved_roll_lock = threading.Lock()
+        self._cache_lock = threading.Lock()
+        self._cache_generation = 0
+        self._system = _SYSTEM_UNSET
+        self._role = _SYSTEM_UNSET
+        self._cursor_supported = None
+        if client is not None:
+            client.on_unauthorized = self.on_unauthorized
+        if ws is not None:
+            ws.on_context_invalidated = self.invalidate_campaign
 
     @classmethod
     def from_env(cls) -> "Ctx":
@@ -68,11 +83,49 @@ class Ctx:
     # ---- 战役规则系统（懒取 + 缓存；None = 未设置 flexible）----
 
     def get_system(self):
-        if getattr(self, "_system", _SYSTEM_UNSET) is _SYSTEM_UNSET:
-            camp = self.client.get(f"/api/campaigns/{self.campaign_id}").get("campaign", {})
-            self._system = camp.get("gameSystem")
-            log.info("战役规则系统：%s", self._system or "未设置(flexible)")
-        return self._system
+        with self._cache_lock:
+            system = self._system
+        if system is _SYSTEM_UNSET:
+            return self.read_campaign().get("gameSystem")
+        return system
+
+    def invalidate_campaign(self):
+        with self._cache_lock:
+            self._cache_generation += 1
+            self._system = self._role = _SYSTEM_UNSET
+            self._cursor_supported = None
+
+    def on_unauthorized(self):
+        self.invalidate_campaign()
+        # 上游吊销 session 不踢已有 WS；主动使旧认证失效，重连取新 Cookie。
+        if self.ws is not None and hasattr(self.ws, "invalidate_auth"):
+            self.ws.invalidate_auth("REST 返回 401，旧 WS 认证已失效")
+
+    def role_from_campaign(self, camp):
+        role = camp.get("userRole")
+        if role is None:
+            me = (self.auth.user or {}).get("id")
+            role = next((m.get("role") for m in camp.get("memberships", [])
+                         if me and m.get("userId") == me), None)
+        return role  # ownerId 不是 DM 角色证据
+
+    def read_campaign(self):
+        with self._cache_lock:
+            generation = self._cache_generation
+        camp = self.client.get(f"/api/campaigns/{self.campaign_id}").get("campaign", {})
+        with self._cache_lock:
+            if generation == self._cache_generation:
+                self._system = camp.get("gameSystem")
+                self._role = self.role_from_campaign(camp)
+        return camp
+
+    def cached_role(self):
+        with self._cache_lock:
+            return None if self._role is _SYSTEM_UNSET else self._role
+
+    def get_role(self):
+        # 写前重新读，避免漏掉移交广播后继续使用过期角色。
+        return self.role_from_campaign(self.read_campaign())
 
     # ---- WS 懒启动 ----
 
@@ -129,7 +182,13 @@ def wrap(fn):
         except PartialFailure as e:
             return {"ok": False, "error": str(e), "data": e.data}
         except ApiError as e:
-            return _err(f"HTTP {e.status}: {e.message}" if e.status else e.message)
+            if e.status == 404:
+                message = E_OLD if e.message == "The requested resource does not exist" else E_RESOURCE + e.message
+            else:
+                message = f"HTTP {e.status}: {e.message}" if e.status else e.message
+            result = _err(message)
+            result["data"] = {"status": e.status, "upstream": e.details or {"message": e.message}}
+            return result
         except Exception as e:
             log.exception("工具调用异常: %s", fn.__name__)
             return _err(f"{type(e).__name__}: {e}")
@@ -137,6 +196,8 @@ def wrap(fn):
 
 
 def register_all(mcp, get_ctx) -> None:
-    from tools import read_tools, write_tools
+    from tools import read_tools, write_tools, document_tools, campaign_tools
     read_tools.register(mcp, get_ctx)
     write_tools.register(mcp, get_ctx)
+    document_tools.register(mcp, get_ctx)
+    campaign_tools.register(mcp, get_ctx)
