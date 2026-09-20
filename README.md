@@ -70,7 +70,7 @@ character ID. `character_delete` permanently deletes an owned sheet. Add `roster
 
 | cozyvtt-mcp | CozyVTT | Notes |
 |---|---|---|
-| **0.4.0** | **v1.2.2 / v1.4.0** | Dual baseline. Tool-set presets plus `map_create`/`map_delete`/`token_delete`/`character_delete`. Offline contract suite 228/228; container boot checked with no environment set. No live campaign run for this version. |
+| **0.4.0** | **v1.2.2 / v1.4.0** | Dual baseline. Tool-set presets plus `map_create`/`map_delete`/`token_delete`/`character_delete`. Offline contract suite 228/228; the `Dockerfile` was replayed inside the real `python:3.12-slim` rootfs (hash-checked layers) and boots with no environment set, listing 41 tools. No live campaign run, and no OCI image was built (no Docker daemon on the build host). |
 | **0.3.0** | **v1.2.2 / v1.4.0** | Dual baseline. Parameter descriptions, MCP annotations, container image. Offline suite 176/176; image built and booted (37 tools, no environment). No live campaign run. |
 | **0.2.0** | **v1.2.2 / v1.4.0** | Dual baseline: retain original tools; new REST routes degrade explicitly on old instances. Offline suite 176/176; live v1.4.0 smoke (read/write + Documents/Saved Rolls round-trips) passed 2026-09-17. |
 | 0.1.1 | v1.2.2 | Previous 20-tool release |

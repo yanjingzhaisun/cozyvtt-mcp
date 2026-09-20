@@ -14,6 +14,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 ### Verified
 
 - 228 offline tests; stdio counts: default 41, play 20, docs 9. All 37 existing tool definitions compared unchanged. CozyVTT v1.4.0 endpoint contracts reviewed from the pinned API snapshot and source; no live campaign access or new live compatibility claim.
+- The `Dockerfile` was replayed against the real base image without a Docker daemon: the `python:3.12-slim` linux/amd64 layers were pulled from a registry mirror with each layer's sha256 checked, extracted into a chroot, the seven `COPY` paths replayed, the `uv.lock` closure installed with `pip --require-hashes` using the image's own Python 3.12.14, and `ENTRYPOINT` then run with an empty environment. It answers `initialize`, lists 41 tools (20 with `--toolsets play`), and exits 0 on stdin EOF. No OCI image was assembled and no container runtime was exercised.
 
 ## [0.3.0] — 2026-09-21
 

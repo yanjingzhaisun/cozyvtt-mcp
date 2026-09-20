@@ -68,7 +68,7 @@ token 数按 `bytes // 4` 估算，并非 tokenizer 实测。
 
 | cozyvtt-mcp | CozyVTT | 说明 |
 |---|---|---|
-| **0.4.0** | **v1.2.2 / v1.4.0** | 双基线。工具集预设，加 `map_create`/`map_delete`/`token_delete`/`character_delete`。离线契约 228/228；容器内空环境启动已核。本版未做真实战役验证。 |
+| **0.4.0** | **v1.2.2 / v1.4.0** | 双基线。工具集预设，加 `map_create`/`map_delete`/`token_delete`/`character_delete`。离线契约 228/228；`Dockerfile` 已在真 `python:3.12-slim` rootfs 内逐层校验并重放，空环境下可启动并列出 41 个工具。本版未做真实战役验证，也未构建 OCI 镜像（构建宿主没有 Docker daemon）。 |
 | **0.3.0** | **v1.2.2 / v1.4.0** | 双基线。参数描述、MCP annotations、容器镜像。离线 176/176；镜像已构建并空环境启动（37 工具）。未做真实战役验证。 |
 | **0.2.0** | **v1.2.2 / v1.4.0** | 双基线：保留原有工具；新 REST 路由在旧实例上明确降级报错。离线 176/176；v1.4.0 真实实例冒烟（读写＋Documents/Saved Rolls 往返）2026-09-17 通过。 |
 | 0.1.1 | v1.2.2 | 上一版，20 个工具 |
