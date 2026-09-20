@@ -90,8 +90,8 @@ CozyVTT v1.4.0 support. Dual baseline: v1.2.2 and v1.4.0. Adaptation driven by a
 - Auth discipline: `rememberMe` login, 10-min keepalive, ≥3-min re-login spacing, 429 exponential backoff.
 - WS listener with 500-event ring buffer, single reconnect worker, `events_poll` cursor semantics.
 
-[0.4.0]: https://github.com/yanjingzhaisun/cozyvtt-mcp/compare/tdqs-quality...toolsets-and-completeness
-[0.3.0]: https://github.com/yanjingzhaisun/cozyvtt-mcp/compare/v0.2.1...tdqs-quality
+[0.4.0]: https://github.com/yanjingzhaisun/cozyvtt-mcp/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/yanjingzhaisun/cozyvtt-mcp/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/yanjingzhaisun/cozyvtt-mcp/releases/tag/v0.2.1
 [0.2.0]: https://github.com/yanjingzhaisun/cozyvtt-mcp/releases/tag/v0.2.0
 [0.1.1]: https://github.com/yanjingzhaisun/cozyvtt-mcp/releases/tag/v0.1.1

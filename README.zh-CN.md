@@ -8,20 +8,21 @@
 
 为 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 打造并实测，但兼容任意 MCP 客户端（stdio 传输）。
 
-## v0.3.0 tool metadata and migration
+## 升级说明
 
-All 37 tools now expose parameter descriptions and MCP behavior annotations. Use
-`campaign_get()`, `initiative_read(refresh=true)`, and
-`token_hp_update(character_id=..., delta=...)`; the three previous names are removed.
-See [Breaking changes](CHANGELOG.md#breaking) for the old-to-new mapping.
-Defaults, routes, WS events, and result envelopes are unchanged. The current release
-has offline regression coverage; the live results below remain historical evidence.
-[Accuracy audit](ForAI/TDQS_Quality_Report.md) records wording corrections and limits.
+README 讲的是怎么装、怎么用当前版本；变更历史在 [CHANGELOG.md](CHANGELOG.md)。接客户端前有两处迁移点要知道：
+
+- **0.3.0 改了三个工具名**：`campaign_status` → `campaign_get`、`initiative_state` →
+  `initiative_read`、`token_hp` → `token_hp_update`。没有注册别名，请同步更新客户端里勾选的工具。
+  [新旧对照](CHANGELOG.md#breaking)。
+- **`chat_read` 改用 `limit`/`cursor` 分页**（`offset` 参数在 0.2.0 已移除）。
+
+默认加载全部工具；可选预设见[工具集](#tool-sets工具集)。
 
 ## Tool sets（工具集）
 
-**默认加载全部工具（`all`）。** v0.4.0 支持在注册时筛选工具，未选工具不会出现在
-`tools/list` 中；已有工具定义保持不变。多个预设用逗号分隔并取并集，重复名称允许，
+**默认加载全部工具（`all`）。** 可选的注册期筛选会让未选工具**完全不出现在
+`tools/list` 中**；其余工具的行为不受影响。多个预设用逗号分隔并取并集，重复名称允许，
 包含 `all` 时加载全部工具。命令行参数优先于 `COZYVTT_MCP_TOOLSETS` 环境变量。
 空值或未知名称会以非零状态退出，并列出有效名称和工具数量。
 `--list-toolsets` 打印各预设的工具和默认项，然后成功退出，无需连接 CozyVTT。
@@ -29,11 +30,11 @@ has offline regression coverage; the live results below remain historical eviden
 | Preset | Tools | Selection |
 |---|---:|---|
 | `play` | 20 | `campaign_get`, `chat_read`, `chat_send`, `creature_search`, `dice_roll`, `events_poll`, `initiative_manage`, `initiative_read`, `map_create`, `map_delete`, `map_list`, `map_switch`, `session_list`, `session_manage`, `session_notes_update`, `token_add`, `token_delete`, `token_hp_update`, `token_move`, `token_place_creature` |
-| `docs` | 9 | All `document_*` tools plus `campaign_document_list` |
-| `roster` | 7 | All `character_*` tools |
-| `macros` | 4 | All `saved_roll_*` tools |
+| `docs` | 9 | 全部 `document_*` 工具，加 `campaign_document_list` |
+| `roster` | 7 | 全部 `character_*` 工具 |
+| `macros` | 4 | 全部 `saved_roll_*` 工具 |
 | `admin` | 1 | `campaign_transfer_dm` |
-| `all` (default) | 41 | Every tool |
+| `all`（默认） | 41 | 全部工具 |
 
 ```sh
 .venv/bin/python server.py --toolsets play,macros
@@ -57,31 +58,22 @@ token 数按 `bytes // 4` 估算，并非 tokenizer 实测。
 | `admin` | 1,199 | 299 | 98% |
 | `all` | 59,358 | 14,839 | 0% |
 
-v0.4.0 新增 `map_create`、`map_delete`、`token_delete` 和 `character_delete`。
+工具面里还包含 `map_create`、`map_delete`、`token_delete` 和 `character_delete`。
 地图创建使用已有图片资源；删除当前地图前须先用 `map_switch` 切换。
 `token_delete` 接受地图 token ID；`token_hp_update` 接受角色 ID 并调整角色卡 HP。
-`character_delete` 永久删除自己拥有的角色卡。已有调用无需迁移，需要角色或文档工具时
-可追加 `roster` 或 `docs`。
+`character_delete` 永久删除自己拥有的角色卡。需要角色或文档工具时可追加
+`roster` 或 `docs`。
 
 ## 兼容性
 
 | cozyvtt-mcp | CozyVTT | 说明 |
 |---|---|---|
-| **0.2.0** | **v1.2.2 / v1.4.0** | 双基线：保留原有工具；新 REST 路由在旧实例上明确降级报错。离线契约测试 176/176；v1.4.0 真实实例冒烟（读写＋Documents/Saved Rolls 往返）2026-09-17 通过。 |
+| **0.4.0** | **v1.2.2 / v1.4.0** | 双基线。工具集预设，加 `map_create`/`map_delete`/`token_delete`/`character_delete`。离线契约 228/228；容器内空环境启动已核。本版未做真实战役验证。 |
+| **0.3.0** | **v1.2.2 / v1.4.0** | 双基线。参数描述、MCP annotations、容器镜像。离线 176/176；镜像已构建并空环境启动（37 工具）。未做真实战役验证。 |
+| **0.2.0** | **v1.2.2 / v1.4.0** | 双基线：保留原有工具；新 REST 路由在旧实例上明确降级报错。离线 176/176；v1.4.0 真实实例冒烟（读写＋Documents/Saved Rolls 往返）2026-09-17 通过。 |
 | 0.1.1 | v1.2.2 | 上一版，20 个工具 |
 
 兼容表描述的是已支持的契约，不是推断的服务器版本。新功能在确认可用前一律报告 `unknown`；空列表或业务 404 不能作为路由不存在的证据。完整 41 工具契约见 [SPEC v2](SPEC.md)。
-
-## v0.2.0 变更与迁移
-
-- **新增 17 个工具**：Documents（9）、Saved Rolls（4）、DM 移交/收回（1）、Hit Dice 花费（1）、场次历史/摘要（2）。`saved_roll_list` 已返回完整宏，没有 `saved_roll_get`。
-- **Breaking change——`chat_read`**：移除 `offset`。先调 `chat_read(limit=20)`，之后把返回的 `pagination.nextCursor` 原样作 `cursor` 传入翻页；`nextCursor` 为 null 即到底。无游标元数据的旧实例只支持最新一页；翻历史会返回「此实例不支持可靠的历史游标分页；仅可读取最新一页。」而不是重复同一页。
-- 文档原文读取保留 MIME 与 ETag。文本返回 `{mime_type,etag,content}`；PDF 存到项目 `downloads/<document_id>.pdf` 并返回 `{mime_type,etag,file_path,file_size}`。传 `etag` 走 `If-None-Match`；304 返回 `{not_modified:true}` 让调用方复用已有内容。downloads 已 gitignore；上游删除不会清本地副本。
-- REST 401 会使现有 WS 认证与战役缓存失效。新增事件：`character.updated`、`campaign.dm.transferred`、`roster.updated`、`dice.historyCleared`。DM 移交会清角色/系统缓存；失去成员资格会取消 WS 认证。
-- `character_validate` 始终附 `validation_reliable:false`：上游 v1.4.0 会丢弃校验失败并误报 `isValid:true`；旧服务器的可靠性未知。
-- token 尺寸为整数 1..10；`token_move` 拒绝旁观者。切图分别报告 REST 落库与 WS 广播两个状态。`initiative_read(refresh=true)` 主动拉取最新状态，超时报告未知。
-
-REST 路由缺失型 404（上游原文 `The requested resource does not exist`）返回「当前 CozyVTT 实例未提供此功能；请升级到支持该功能的版本后重试。」；其他 404 返回「资源不存在或当前账号无权访问（HTTP 404）：<上游 message>」。错误 `data` 保留状态码与上游细节。向旧上传路由传 DOCUMENT 类型可能 400——原样返回该错误，不会换类型/scope 重试。
 
 ## 功能
 
@@ -89,12 +81,12 @@ REST 路由缺失型 404（上游原文 `The requested resource does not exist`�
 
 - **场次/战役**：`campaign_get`（role 与 owner 分开报告；新能力键可为 `unknown`）、`session_manage`、`session_list`、`session_notes_update`、`campaign_transfer_dm`（owner 收回也走它）、`map_list`、`map_switch`
 - **叙事**：`chat_send`（DM / PLAYER）、`chat_read`
-- **Dice**: `dice_roll` (server-authoritative; `is_secret=true` maps to `secret` and delivers to the roller and DMs on v1.4.0), `events_poll` (recent buffered events, not durable history; DICE_ROLL events are absent from chat history)
-- **Token/地图**：`token_add`、`token_move`、`token_hp_update`、`token_place_creature`、`token_delete`、`map_create`、`map_delete`、`creature_search`（SRD＋自定义怪库）
+- **骰**：`dice_roll`（服务器公证出骰；`is_secret=true` 对应线上字段 `secret`，在 v1.4.0 上只投递给掷骰者与 DM）、`events_poll`（近期缓冲事件，不是持久历史；DICE_ROLL 事件不出现在聊天历史里）
+- **Token/地图**：`token_add`（整数尺寸 1..10）、`token_move`、`token_hp_update`、`token_place_creature`、`token_delete`、`map_create`、`map_delete`、`creature_search`（SRD＋自定义怪库）
 - **战斗**：`initiative_manage`（add / remove / **roll** / **set** / **reorder** / start / next / end）、`initiative_read`（注意：CoC7e 先攻按 DEX 排序不骰——这是上游规则行为，`roll` 已相应门控）
 - **角色**：`character_list`、`character_get`、`character_create`、`character_delete`、`character_validate`、`character_update`（规则数值由 agent 计算，桥只负责写值）
 - **文档**：`document_upload`、`document_create`、`document_list`、`campaign_document_list`、`document_read`、`document_update`、`document_share`、`document_unshare`、`document_delete`
-- **Saved Rolls**：`saved_roll_list`、`saved_roll_create`、`saved_roll_update`、`saved_roll_delete`（按用户×战役私有；每用户每战役 50 条，表达式服务器校验）
+- **Saved Rolls**：`saved_roll_list`、`saved_roll_create`、`saved_roll_update`、`saved_roll_delete`（按用户×战役私有；每用户每战役 50 条，表达式服务器校验）。`saved_roll_list` 返回完整宏，没有 `saved_roll_get`。
 - **Hit Dice**：`character_hitdice_spend`（仅 DND_5E；只扣一次，不骰骰子不加血）
 
 ## 系统门控
@@ -135,6 +127,12 @@ MCP client (stdio)
 - `session_manage` 走 REST。pause/end 解析 `campaign.activeSession.id`；start 新建场次。end 接受 `notes`（≤2000 字，全战役可读）与 `save_state=true`。空 notes 不会清掉旧摘要；要清空用 `session_notes_update(session_id, notes="")`。`session_list` 的最近 50 条里可能含进行中场次。
 - Documents 的 scope 为 `USER`（个人）、`CAMPAIGN`、`GLOBAL`。`document_list` 过滤资产库；`campaign_document_list` 能发现被分享的私人文档。直接创建/编辑 txt/md 限 900 KiB UTF-8；文件上传走实例限额（默认 50 MiB）。PDF 内容不可编辑。unshare 只删一条 link，不能收回原生/global 来源的权限；`shared:false` 表示战役原生文档。删除会移除资产及其全部 links。
 - WS 重连使用最新的、按 URL 过滤的 Cookie，并在战役认证后主动请求当前先攻状态。远程部署请用 HTTPS。
+- `chat_read` 用 `limit` + `cursor` 分页：先读最新一页，再把返回的 `pagination.nextCursor` 原样作 `cursor` 传入；`nextCursor` 为 `null` 即到底。无游标元数据的旧实例只服务最新一页，并如实返回「此实例不支持可靠的历史游标分页；仅可读取最新一页。」而不会重复同一页。
+- 文档原文读取保留 MIME 与 ETag。文本返回 `{mime_type,etag,content}`；PDF 写入项目 `downloads/<document_id>.pdf` 并返回 `{mime_type,etag,file_path,file_size}`。传 `etag` 走 `If-None-Match`；304 返回 `{not_modified:true}` 供调用方复用已有内容。downloads 已 gitignore，上游删除不会清掉本地副本。
+- REST `401` 会使现有 WS 认证与战役缓存失效；失去战役成员资格会取消 WS 认证（而不是反复重连）。`campaign_transfer_dm` 会清角色/系统缓存；`character.updated`、`campaign.dm.transferred`、`roster.updated`、`dice.historyCleared` 会被缓冲供 `events_poll` 读取。
+- `character_validate` 始终附 `validation_reliable:false`：上游 v1.4.0 会丢弃校验失败并误报 `isValid:true`；旧服务器的可靠性未知。
+- `initiative_read(refresh=true)` 主动拉取最新状态，超时报告未知；REST 路径下 token 坐标是确定的。
+- 路由缺失型 404（上游原文恰好是 `The requested resource does not exist`）返回「当前 CozyVTT 实例未提供此功能；请升级到支持该功能的版本后重试。」；其他 404 返回「资源不存在或当前账号无权访问（HTTP 404）：<上游 message>」。错误 `data` 保留状态码与上游细节。向旧上传路由传 DOCUMENT 类型可能 400——原样返回该错误，不会换类型/scope 重试。
 
 ## 环境要求
 
@@ -229,7 +227,9 @@ MIT（见 [LICENSE](LICENSE)）。CozyVTT 本体为 AGPLv3——本项目是独�
 
 - CozyVTT 上游：https://github.com/CheekyChinchilla/CozyVTT
 - AI 集成讨论：https://github.com/CheekyChinchilla/CozyVTT/issues/32
-- 版本历史：[CHANGELOG.md](CHANGELOG.md)
+- 版本历史与 breaking 对照：[CHANGELOG.md](CHANGELOG.md)
+- Releases：https://github.com/yanjingzhaisun/cozyvtt-mcp/releases
+- 工具定义准确度审计（措辞修正与边界）：[ForAI/TDQS_Quality_Report.md](ForAI/TDQS_Quality_Report.md)
 
 ## 生态
 

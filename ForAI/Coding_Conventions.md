@@ -187,8 +187,18 @@ The [authoring guide](00_Index.md#local-research-and-authoring-sources) supplies
 
 **Why:** a fake that repeats an implementation mistake can pass while real behavior is broken; manual probes can also mutate a campaign unexpectedly.
 
-**MUST:** run the authorized offline suite with `.venv/bin/python -m pytest -q`, retaining responses/FakeSIO isolation and the real-TCP guard in [tests/conftest.py](../tests/conftest.py). Preserve real FastMCP schema/stdio checks, deterministic lifecycle/cooldown regressions, and failure-path evidence. The baseline at this documentation addition is **176 tests**; report the actual count and Python version used, not an assumed environment. Do not install/update dependencies or access a network when the task is offline.
+**MUST:** run the authorized offline suite with `.venv/bin/python -m pytest -q`, retaining responses/FakeSIO isolation and the real-TCP guard in [tests/conftest.py](../tests/conftest.py). Preserve real FastMCP schema/stdio checks, deterministic lifecycle/cooldown regressions, and failure-path evidence. The baseline after the 0.4.0 tool-set/completeness addition is **228 tests** (was 176 through 0.3.0); report the actual count and Python version used, not an assumed environment. Do not install/update dependencies or access a network when the task is offline.
 
 If the task must leave local runtime files untouched, run that exact command in an isolated copy of the current working tree and existing environment; report the isolation explicitly. The stdio test invokes main(), which creates logs, so running it in the original tree is not file-neutral ([tests/test_server.py:81](../tests/test_server.py#L81), [server.py:97](../server.py#L97)).
 
 Before committing, check the requested file scope, internal links/front matter when relevant, `git diff --check`, and the staged diff. Do not touch config.yaml/MCP registration, sibling projects, real campaigns, versions, or release state unless the task calls for it. Keep live smoke separate and explicitly authorized; never import probe scripts as a test shortcut. After committing, inspect the commit's file list and working-tree status, report limitations, and stop at the authorized delivery boundary.
+
+### P19. README is for usage, CHANGELOG is for history
+
+**Why:** version-numbered sections in the README make the current release look stale. 0.4.0 shipped with its changes folded into the usage sections, while the top of both READMEs still carried `## v0.3.0 …` / `## v0.2.0 …` release prose — so the file (and its translation) read as if 0.4.0 had never landed. Those sections also duplicated behaviour facts that then drift independently of the code.
+
+**MUST:** README.md and README.zh-CN.md describe **how to install, configure, and use the current release**: features, contracts, gating, configuration, testing, troubleshooting, links. Version history, per-release changes, and migration narratives live in **CHANGELOG.md only**. The README keeps at most one short **Upgrading** section that names the breaking points a user still has to act on and links to `CHANGELOG.md#breaking`.
+
+Behaviour facts a user needs at run time (pagination semantics, ETag/304 handling, 404 wording, idempotency caveats, event names) belong in the usage sections written **without version references** — not in a release-note section. The compatibility table lists tested baselines only, newest first, and must be updated whenever a release ships. When a task says "sync the README", that means the usage sections and the compatibility table, never a new version-numbered narrative.
+
+README.zh-CN.md is a translation of the English README: no untranslated English paragraphs or English table cells. Both files must keep the same section order so links between them stay valid.

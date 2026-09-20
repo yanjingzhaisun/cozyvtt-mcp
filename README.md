@@ -8,20 +8,22 @@ MCP (Model Context Protocol) bridge for [CozyVTT](https://github.com/CheekyChinc
 
 Built for and tested with [Hermes Agent](https://github.com/NousResearch/hermes-agent), but works with any MCP client (stdio transport).
 
-## v0.3.0 tool metadata and migration
+## Upgrading
 
-All 37 tools now expose parameter descriptions and MCP behavior annotations. Use
-`campaign_get()`, `initiative_read(refresh=true)`, and
-`token_hp_update(character_id=..., delta=...)`; the three previous names are removed.
-See [Breaking changes](CHANGELOG.md#breaking) for the old-to-new mapping.
-Defaults, routes, WS events, and result envelopes are unchanged. The current release
-has offline regression coverage; the live results below remain historical evidence.
-[Accuracy audit](ForAI/TDQS_Quality_Report.md) records wording corrections and limits.
+This README describes how to install and use the current release; the change history lives in
+[CHANGELOG.md](CHANGELOG.md). Two migration points are worth knowing before you wire up a client:
+
+- **Three tools were renamed in 0.3.0**: `campaign_status` → `campaign_get`, `initiative_state` →
+  `initiative_read`, `token_hp` → `token_hp_update`. No aliases are registered — update client tool
+  selections. [Old-to-new mapping](CHANGELOG.md#breaking).
+- **`chat_read` paginates with `limit`/`cursor`** (the `offset` argument was removed in 0.2.0).
+
+The default tool set is every tool; optional presets are described under [Tool sets](#tool-sets).
 
 ## Tool sets
 
-**The default is all tools.** v0.4.0 adds optional registration-time filtering; excluded
-tools are absent from `tools/list`. Existing tool definitions are unchanged.
+**The default is every tool.** Optional registration-time filtering drops excluded tools from
+`tools/list` entirely; it changes nothing about how the remaining tools behave.
 Choose comma-separated presets (union); duplicates are accepted and `all` wins.
 The flag overrides `COZYVTT_MCP_TOOLSETS`. Empty values or unknown names fail with
 valid preset names and counts. `--list-toolsets` prints all memberships and the default,
@@ -58,31 +60,22 @@ tokens are estimates (`bytes // 4`), not tokenizer measurements.
 | `admin` | 1,199 | 299 | 98% |
 | `all` | 59,358 | 14,839 | 0% |
 
-v0.4.0 also adds `map_create`, `map_delete`, `token_delete`, and `character_delete`.
+The surface also includes `map_create`, `map_delete`, `token_delete`, and `character_delete`.
 Create maps from existing image assets; use `map_switch` before deleting the current
 map. `token_delete` removes a map token; `token_hp_update` changes sheet HP using a
-character ID. `character_delete` permanently deletes an owned sheet. No existing call
-needs migration; add `roster` or `docs` when a session needs those tools.
+character ID. `character_delete` permanently deletes an owned sheet. Add `roster` or
+`docs` when a session needs those tools.
 
 ## Compatibility
 
 | cozyvtt-mcp | CozyVTT | Notes |
 |---|---|---|
-| **0.2.0** | **v1.2.2 / v1.4.0** | Dual baseline: retain original tools; new REST routes degrade explicitly on old instances. Offline contract tests 176/176; live v1.4.0 smoke (read/write + Documents/Saved Rolls round-trips) passed 2026-09-17. |
+| **0.4.0** | **v1.2.2 / v1.4.0** | Dual baseline. Tool-set presets plus `map_create`/`map_delete`/`token_delete`/`character_delete`. Offline contract suite 228/228; container boot checked with no environment set. No live campaign run for this version. |
+| **0.3.0** | **v1.2.2 / v1.4.0** | Dual baseline. Parameter descriptions, MCP annotations, container image. Offline suite 176/176; image built and booted (37 tools, no environment). No live campaign run. |
+| **0.2.0** | **v1.2.2 / v1.4.0** | Dual baseline: retain original tools; new REST routes degrade explicitly on old instances. Offline suite 176/176; live v1.4.0 smoke (read/write + Documents/Saved Rolls round-trips) passed 2026-09-17. |
 | 0.1.1 | v1.2.2 | Previous 20-tool release |
 
 The compatibility table describes supported contracts, not an inferred server version. New feature availability is `unknown` until established; an empty list or a business 404 is not evidence that the route is missing. See [SPEC v2](SPEC.md) for the complete 41-tool contract.
-
-## v0.2.0 changes and migration
-
-- **17 new tools**: Documents (9), Saved Rolls (4), DM transfer/reclaim (1), Hit Dice spend (1), session history/notes (2). `saved_roll_list` already returns complete macros; there is no `saved_roll_get`.
-- **Breaking change — `chat_read`**: remove `offset`. Call `chat_read(limit=20)` first, then pass the returned `pagination.nextCursor` as `cursor`. Messages and pagination pass through unchanged. If `nextCursor` is null, stop. Old instances without cursor metadata support only the latest page; history requests return `This instance does not support reliable cursor pagination for history; only the latest page can be read.` instead of repeating it.
-- Raw document reads preserve MIME type and ETag. Text returns `{mime_type,etag,content}`; PDFs are saved to project `downloads/<document_id>.pdf` and return `{mime_type,etag,file_path,file_size}`. Pass `etag` for `If-None-Match`; 304 returns `{not_modified:true}` for the caller to reuse existing content. Downloads are Git-ignored; upstream deletion does not remove local copies.
-- REST 401 invalidates existing WS authentication and campaign caches. New events include `character.updated`, `campaign.dm.transferred`, `roster.updated`, and `dice.historyCleared`. DM transfer clears role/system caches; losing membership cancels WS authentication.
-- `character_validate` always includes `validation_reliable:false`: upstream v1.4.0 can discard validation failures and incorrectly report `isValid:true`; reliability on older servers is unknown.
-- Token sizes are integers 1..10; `token_move` rejects spectators. Map switching reports REST persistence separately from WS broadcast dispatch. `initiative_read(refresh=true)` requests fresh state and reports unknown on timeout.
-
-REST route-missing 404 with the exact upstream message `The requested resource does not exist` returns `This CozyVTT instance does not provide this feature; upgrade to a supported version and retry.`. Other 404s return `Resource not found or inaccessible to the current account (HTTP 404): <upstream message>`. Error `data` preserves status and upstream details. Uploading DOCUMENT to an old upload route may return 400; that error is preserved without retrying with a different type or scope.
 
 ## Features
 
@@ -91,11 +84,11 @@ REST route-missing 404 with the exact upstream message `The requested resource d
 - **Session/campaign**: `campaign_get` (role and owner reported separately; new capability keys may be `unknown`), `session_manage`, `session_list`, `session_notes_update`, `campaign_transfer_dm` (owner reclaim uses the same tool), `map_list`, `map_switch`
 - **Narration**: `chat_send` (DM / PLAYER), `chat_read`
 - **Dice**: `dice_roll` (server-authoritative results; `is_secret=true` (wire field: `secret`) delivers to the roller and DMs on v1.4.0), `events_poll` (recent buffered dice events, not durable history; DICE_ROLL events are absent from chat history)
-- **Tokens/maps**: `token_add`, `token_move`, `token_hp_update`, `token_place_creature`, `token_delete`, `map_create`, `map_delete`, `creature_search` (SRD + custom library)
+- **Tokens/maps**: `token_add` (integer sizes 1..10), `token_move`, `token_hp_update`, `token_place_creature`, `token_delete`, `map_create`, `map_delete`, `creature_search` (SRD + custom library).
 - **Combat**: `initiative_manage` (add / remove / **roll** / **set** / **reorder** / start / next / end), `initiative_read` (note: CoC7e initiative is DEX-ordered, no roll — this is upstream rules behavior, and `roll` is gated accordingly)
 - **Characters**: `character_list`, `character_get`, `character_create`, `character_delete`, `character_validate`, `character_update` (rules math is done by the agent; the bridge just writes values)
 - **Documents**: `document_upload`, `document_create`, `document_list`, `campaign_document_list`, `document_read`, `document_update`, `document_share`, `document_unshare`, `document_delete`
-- **Saved Rolls**: `saved_roll_list`, `saved_roll_create`, `saved_roll_update`, `saved_roll_delete` (private to the current user and campaign; 50 macros per user/campaign, server-validated expressions)
+- **Saved Rolls**: `saved_roll_list`, `saved_roll_create`, `saved_roll_update`, `saved_roll_delete` (private to the current user and campaign; 50 macros per user/campaign, server-validated expressions). `saved_roll_list` returns complete macros — there is no `saved_roll_get`.
 - **Hit Dice**: `character_hitdice_spend` (DND_5E only; dispatches one spend without rolling dice or healing)
 
 ## System gating
@@ -136,6 +129,12 @@ Design notes:
 - `session_manage` uses REST. Pause/end resolve `campaign.activeSession.id`; start creates a session. End accepts `notes` (≤2000 characters, shared with the campaign) and `save_state=true`. Empty end notes do not clear old notes; use `session_notes_update(session_id,notes="")` to clear. `session_list` includes active sessions among the most recent 50.
 - Documents use scope `USER` (personal), `CAMPAIGN`, or `GLOBAL`. `document_list` filters the asset library; `campaign_document_list` discovers shared private documents too. Typed txt/md create/update is limited to 900 KiB UTF-8; file uploads use the instance limit (default 50 MiB). PDF content cannot be edited. Unsharing removes only one link and cannot revoke native/global access; `shared:false` indicates a native campaign document. Deleting removes the asset and all its links.
 - WS reconnects use fresh, URL-scoped Cookies and request current initiative state after campaign authentication. Use HTTPS for remote deployments.
+- `chat_read` paginates with `limit` + `cursor`: read the newest page first, then pass the returned `pagination.nextCursor` back as `cursor`, and stop when it is `null`. Instances without cursor metadata serve only the latest page and say so (`This instance does not support reliable cursor pagination for history; only the latest page can be read.`) instead of repeating it.
+- Raw document reads preserve MIME type and ETag. Text returns `{mime_type,etag,content}`; PDFs are written to the project's `downloads/<document_id>.pdf` and return `{mime_type,etag,file_path,file_size}`. Pass `etag` as `If-None-Match`; a 304 returns `{not_modified:true}` so the caller can reuse existing content. Downloads are Git-ignored and local copies survive upstream deletion.
+- REST `401` invalidates existing WS authentication and campaign caches; losing campaign membership cancels WS authentication rather than reconnect-looping. `campaign_transfer_dm` clears role and system caches, and the bridge buffers `character.updated`, `campaign.dm.transferred`, `roster.updated`, and `dice.historyCleared` for `events_poll`.
+- `character_validate` always includes `validation_reliable:false`: upstream v1.4.0 can discard validation failures and incorrectly report `isValid:true`; reliability on older servers is unknown.
+- `initiative_read(refresh=true)` requests fresh state and reports unknown on timeout; token positions are deterministic under REST.
+- Route-missing 404 — upstream message exactly `The requested resource does not exist` — returns `This CozyVTT instance does not provide this feature; upgrade to a supported version and retry.` Other 404s return `Resource not found or inaccessible to the current account (HTTP 404): <upstream message>`. Error `data` preserves the status and upstream detail. Uploading a DOCUMENT to an old upload route may return 400; that error is preserved without retrying with a different type or scope.
 
 ## Requirements
 
@@ -241,7 +240,9 @@ MIT (see [LICENSE](LICENSE)). CozyVTT itself is AGPLv3 — this project is an in
 
 - CozyVTT upstream: https://github.com/CheekyChinchilla/CozyVTT
 - AI-integration discussion: https://github.com/CheekyChinchilla/CozyVTT/issues/32
-- Release history: [CHANGELOG.md](CHANGELOG.md)
+- Release history and breaking-change mappings: [CHANGELOG.md](CHANGELOG.md)
+- Releases: https://github.com/yanjingzhaisun/cozyvtt-mcp/releases
+- Tool-definition accuracy audit (wording corrections and limits): [ForAI/TDQS_Quality_Report.md](ForAI/TDQS_Quality_Report.md)
 
 ## Ecosystem
 
