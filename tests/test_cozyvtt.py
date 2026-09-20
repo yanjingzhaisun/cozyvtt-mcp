@@ -201,9 +201,11 @@ class FakeMCP:
     def __init__(self):
         self.tools = {}
 
-    def tool(self, fn):
-        self.tools[fn.__name__] = fn
-        return fn
+    def tool(self, fn=None, **kwargs):
+        def register(fn):
+            self.tools[fn.__name__] = fn
+            return fn
+        return register(fn) if fn is not None else register
 
 
 class StubClient:
@@ -288,7 +290,7 @@ def test_tools_ok_structure():
     tools = build_tools(make_ctx())
     r = tools["chat_read"]()
     assert r["ok"] is True and "data" in r
-    r = tools["campaign_status"]()
+    r = tools["campaign_get"]()
     assert r["ok"] is True
     assert r["data"]["campaign"]["name"] == "\u963f\u5361\u59c6\u591c\u8bdd"
 
@@ -395,12 +397,12 @@ def test_creature_search_srd_allowed_on_5e_and_custom_open():
     assert tools_coc["creature_search"](search="\u6df1\u6f5c\u8005", source="custom")["ok"] is True
 
 
-def test_campaign_status_features_surface():
+def test_campaign_get_features_surface():
     tools = build_tools(make_ctx(client=StubClient(system="DND_5E")))
-    f = tools["campaign_status"]()["data"]["features"]
+    f = tools["campaign_get"]()["data"]["features"]
     assert f["srd_creature_library"] is True and f["initiative_roll"] is True
     tools = build_tools(make_ctx(client=StubClient(system="CALL_OF_CTHULHU_7E")))
-    f = tools["campaign_status"]()["data"]["features"]
+    f = tools["campaign_get"]()["data"]["features"]
     assert f["srd_creature_library"] is False and f["initiative_roll"] is False
 
 

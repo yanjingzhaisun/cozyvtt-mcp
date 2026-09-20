@@ -15,6 +15,7 @@ KEYWORD_CN: 虚拟桌面,开发文档,文档索引,权威来源
 | [ForAI/00_AI_Readme.md](00_AI_Readme.md) | Project orientation, real repository paths, task routing, and links to mandatory rules |
 | [ForAI/00_Index.md](00_Index.md) | Document inventory and source locations; this file |
 | [ForAI/Coding_Conventions.md](Coding_Conventions.md) | Six general rules, project-specific invariants, and tool/release/upstream/document maintenance workflows |
+| [ForAI/TDQS_Quality_Report.md](TDQS_Quality_Report.md) | v0.3.0 metadata coverage, annotation rationale, accuracy audit, and verification limits |
 | [SPEC.md](../SPEC.md) | Canonical intended bridge behavior, including tool schemas/channels and compatibility/fallback contracts |
 | [README.md](../README.md) | English user-facing setup, feature list, migration instructions, compatibility, and troubleshooting |
 | [README.zh-CN.md](../README.zh-CN.md) | Chinese translation of the user entry; not a competing source of API contracts |

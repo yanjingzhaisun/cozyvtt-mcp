@@ -1,0 +1,12 @@
+*
+!Dockerfile
+!uv.lock
+!scripts/
+scripts/*
+!scripts/docker_requirements.py
+!server.py
+!auth.py
+!client.py
+!ws_listener.py
+!tools/
+!tools/*.py

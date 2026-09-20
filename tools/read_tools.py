@@ -1,16 +1,29 @@
-"""Read tools: campaign_status / chat_read / events_poll / map_list /
-initiative_state / character_list / character_get / character_validate / creature_search"""
+"""Read tools: campaign_get / chat_read / events_poll / map_list /
+initiative_read / character_list / character_get / character_validate / creature_search"""
 from __future__ import annotations
+
+from typing import Annotated
+
+from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from tools import (E_CURSOR, INITIATIVE_ROLL_SYSTEMS, SYSTEM_DND5E, require_system, wrap)
 
 
 def register(mcp, get_ctx) -> None:
 
-    @mcp.tool
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False,
+        idempotentHint=True, openWorldHint=True,
+    ))
     @wrap
-    def campaign_status() -> dict:
-        """Get instance health, campaign status, and current map. GET /health returning 200 indicates reachability."""
+    def campaign_get() -> dict:
+        """Read campaign identity, role, health, current map, and capability evidence.
+        Use this for orientation; use map_list for all maps and session_list for sessions.
+        Read-only for campaign members; /health reachability is not feature support, and
+        unprobed capabilities remain unknown. Repeating reads does not change game state.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
         ctx = get_ctx()
         health = {"reachable": False}
         try:
@@ -56,11 +69,31 @@ def register(mcp, get_ctx) -> None:
             "me": ctx.auth.user,
         }
 
-    @mcp.tool
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False,
+        idempotentHint=True, openWorldHint=True,
+    ))
     @wrap
-    def chat_read(limit: int = 20, cursor: str | None = None) -> dict:
-        """Read the latest messages; pass pagination.nextCursor unchanged for the next page. v0.2 removes offset.
-        Older instances without nextCursor support only the latest page. DICE_ROLL is excluded; use events_poll for dice history."""
+    def chat_read(
+        limit: Annotated[
+            int, Field(description=(
+                'Page size, 1..100 messages; defaults to 20.'
+            )),
+        ] = 20,
+        cursor: Annotated[
+            str | None, Field(description=(
+                'Opaque pagination.nextCursor from the previous response; null starts with the '
+                'latest page. Do not construct cursors or offsets.'
+            )),
+        ] = None,
+    ) -> dict:
+        """Read persisted campaign messages with opaque cursor pagination.
+        Use chat_read for narration history; use events_poll for dice results and live events.
+        Read-only for campaign members. Start without a cursor, then pass nextCursor unchanged;
+        stop at null. Older servers support only the latest page and reject cursor history.
+        DICE_ROLL entries are excluded. Repeated reads do not consume messages.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("limit must be in 1..100")
         if cursor is not None and (not isinstance(cursor, str) or not cursor):
@@ -79,12 +112,35 @@ def register(mcp, get_ctx) -> None:
             raise ValueError(E_CURSOR)
         return result
 
-    @mcp.tool
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False,
+        idempotentHint=True, openWorldHint=True,
+    ))
     @wrap
-    def events_poll(since: int = 0, limit: int = 100) -> dict:
-        """Read events with seq > since, including player messages, dice rolls, and movement.
-        Returns events/next_seq/high_water_seq/gap; use next_seq as the next since.
-        latest_seq aliases next_seq; gap indicates evicted events, and cursor_reset indicates a cursor beyond this process."""
+    def events_poll(
+        since: Annotated[
+            int, Field(description=(
+                'Last next_seq received, integer >=0; 0 starts at the oldest retained event. A '
+                'cursor beyond this process resets to 0.'
+            )),
+        ] = 0,
+        limit: Annotated[
+            int, Field(description=(
+                'Maximum events per page, 1..500; defaults to 100. Continue with next_seq when '
+                'has_more is true.'
+            )),
+        ] = 100,
+    ) -> dict:
+        """Read buffered campaign events and asynchronous write errors without consuming them.
+        Use after WS writes; use chat_read for persisted chat history. May connect WS lazily,
+        but does not change game state. Returns earliest seq > since first; advance using
+        next_seq (latest_seq is its alias), not high_water_seq. Check gap for eviction from
+        the 500-event buffer, cursor_reset after process restart, and has_more for pagination.
+        Inspect system.error and relevant state to assess pending writes; broadcasts are not
+        correlated ACKs. Buffered events remain available on connection failure, marked stale;
+        this is not durable dice history. Repeated reads can include newly arriving events.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
         ctx = get_ctx()
         connection_error = None
         try:
@@ -99,17 +155,41 @@ def register(mcp, get_ctx) -> None:
             result["connection_error"] = connection_error
         return result
 
-    @mcp.tool
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False,
+        idempotentHint=True, openWorldHint=True,
+    ))
     @wrap
     def map_list() -> dict:
-        """List campaign maps."""
+        """List maps accessible in the configured campaign to choose a map ID and inspect dimensions.
+        Use map_switch to activate one; listing does not switch maps or place tokens.
+        Read-only for campaign members; repeated calls leave game state unchanged.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
         ctx = get_ctx()
         return ctx.client.get(f"/api/campaigns/{ctx.campaign_id}/maps")
 
-    @mcp.tool
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False,
+        idempotentHint=True, openWorldHint=True,
+    ))
     @wrap
-    def initiative_state(refresh: bool = True) -> dict:
-        """Request fresh initiative.state by default; refresh=false reads the cache. A timeout means unknown state."""
+    def initiative_read(
+        refresh: Annotated[
+            bool, Field(description=(
+                'True requests and waits for fresh state; false uses cached state, which may be '
+                'absent or stale.'
+            )),
+        ] = True,
+    ) -> dict:
+        """Read initiative state without changing turn order or advancing combat.
+        Use initiative_manage to modify combat and events_poll for broadcast history.
+        Campaign members may read. By default, request a new WS state and wait up to two
+        seconds; timeout returns state=null/stale=true, not proof that combat is inactive.
+        refresh=false reads the current connection's cache and marks it stale. Repeated
+        requests do not change initiative; WS authentication is still required.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
         ctx = get_ctx()
         ctx.ensure_ws()
         rec = ctx.ws.latest("initiative.state")
@@ -122,38 +202,112 @@ def register(mcp, get_ctx) -> None:
             return {"state": None, "stale": True, "note": "Initiative state is unknown: no fresh initiative.state received. Read events_poll."}
         return {"state": rec["payload"], "seq": rec["seq"], "ts": rec["ts"], "stale": not refresh}
 
-    @mcp.tool
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False,
+        idempotentHint=True, openWorldHint=True,
+    ))
     @wrap
     def character_list() -> dict:
-        """List characters in the campaign roster."""
+        """List the configured campaign roster to discover character IDs and assignments.
+        Use character_get for one full sheet or character_create to add a sheet.
+        Read-only for campaign members; no creation or roster changes occur on repeat calls.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
         ctx = get_ctx()
         return ctx.client.get(f"/api/campaigns/{ctx.campaign_id}/characters")
 
-    @mcp.tool
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False,
+        idempotentHint=True, openWorldHint=True,
+    ))
     @wrap
-    def character_get(character_id: str) -> dict:
-        """Read the full character sheet, preserving unknown fields; use the character's own gameSystem.
-        Preserve CoC conditions/appearance/spellsAndMythos/notes and DND hitDice unchanged.
-        Keeper notes are ordinary data.notes, not private DM fields."""
+    def character_get(
+        character_id: Annotated[
+            str, Field(description=(
+                'Existing character ID, normally discovered with character_list; the sheet may '
+                'use its own gameSystem.'
+            )),
+        ],
+    ) -> dict:
+        """Read a full character sheet by ID, preserving unknown fields.
+        Use character_list to discover roster IDs and character_update to patch a sheet.
+        Upstream allows the owner or campaign members to read; keeper data.notes are not
+        private DM fields. Interpret data using the character's own gameSystem, preserving
+        CoC fields and DND hitDice structures. Repeated reads do not alter the sheet.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
         ctx = get_ctx()
         return ctx.client.get(f"/api/characters/{character_id}")
 
-    @mcp.tool
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False,
+        idempotentHint=True, openWorldHint=True,
+    ))
     @wrap
-    def character_validate(character_id: str) -> dict:
-        """Owner only. Preserve upstream results, but always set validation_reliable=false.
-        v1.4 ignores validation failures, so isValid=true does not prove validity; older versions have unknown reliability."""
+    def character_validate(
+        character_id: Annotated[
+            str, Field(description=(
+                'Existing character ID owned by the authenticated user; fixed-system validation '
+                'is required upstream.'
+            )),
+        ],
+    ) -> dict:
+        """Read upstream validation diagnostics for an owned character with a fixed gameSystem.
+        Use character_get to inspect fields; do not use this as a reliable save gate.
+        v1.4.0 ignores validation failures, so isValid=true does not prove validity;
+        older-version reliability is unknown. Always adds validation_reliable=false and
+        validation_note. Owner-only upstream read; repeating it does not repair or save data.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
         ctx = get_ctx()
         result = ctx.client.get(f"/api/characters/{character_id}/validate")
         return {**result, "validation_reliable": False,
                 "validation_note": "The upstream v1.4 validation route ignores validation.success=false and may incorrectly report isValid=true; reliability on older versions is unknown."}
 
-    @mcp.tool
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False,
+        idempotentHint=True, openWorldHint=True,
+    ))
     @wrap
-    def creature_search(search: str = "", source: str = "", cr: str = "",
-                        limit: int = 20, offset: int = 0) -> dict:
-        """Search Open5e SRD and campaign custom creatures. source: srd|custom.
-        source=srd requires DND_5E (Open5e is a D&D 5e source); custom supports all systems."""
+    def creature_search(
+        search: Annotated[
+            str, Field(description=(
+                'Name/search filter passed upstream; empty string omits the filter.'
+            )),
+        ] = "",
+        source: Annotated[
+            str, Field(description=(
+                'srd or custom (case-insensitive); empty chooses both for DND_5E and custom for '
+                'other or flexible campaigns.'
+            )),
+        ] = "",
+        cr: Annotated[
+            str, Field(description=(
+                'Challenge-rating filter passed as text, for example 1/2 or 3; empty omits it. '
+                'Applicability is upstream-defined.'
+            )),
+        ] = "",
+        limit: Annotated[
+            int, Field(description=(
+                'Requested page size, normally 1..100; defaults to 20. Values above 100 are '
+                'capped; other validation is upstream.'
+            )),
+        ] = 20,
+        offset: Annotated[
+            int, Field(description=(
+                'Number of search results to skip, normally >=0; defaults to 0. Forwarded '
+                'without local range validation.'
+            )),
+        ] = 0,
+    ) -> dict:
+        """Search library templates for later placement with token_place_creature.
+        Use character_list for campaign character sheets; this does not create either a
+        character or a token. Read-only for campaign members. Explicit srd requires DND_5E;
+        custom works across systems. Empty source searches both in DND_5E and custom otherwise.
+        Search, challenge rating and offset are forwarded; limit is capped at 100 without
+        local lower-bound validation. Repeating a search leaves the library unchanged.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
         ctx = get_ctx()
         params = {"limit": min(limit, 100), "offset": offset}
         if search:

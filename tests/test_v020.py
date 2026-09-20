@@ -438,7 +438,7 @@ def test_hitdice_business_error_visible_without_changing_pending_receipt():
 def test_status_role_is_separate_from_owner_and_features_unknown():
     responses.get(BASE + "/health", json={"status": "ok"})
     responses.get(C, json={"campaign": {"id": CID, "ownerId": "u1", "userRole": "PLAYER", "gameSystem": "DND_5E"}})
-    out = build_tools(http_ctx())["campaign_status"]()["data"]
+    out = build_tools(http_ctx())["campaign_get"]()["data"]
     assert out["role"] == "PLAYER" and out["owner"] == {"id": "u1", "is_me": True}
     assert all(out["features"][key] == "unknown" for key in ("documents", "saved_rolls", "dm_transfer", "hitdice_spend"))
     assert len(responses.calls) == 2
@@ -503,8 +503,8 @@ def test_initiative_refresh_never_returns_old_state_as_fresh():
     ws.sio.push("initiative.state", {"round": 1})
     ws.wait_for_event = Mock(return_value=None)
     t = build_tools(make_ctx(ws=ws))
-    assert t["initiative_state"](refresh=False)["data"]["state"] == {"round": 1}
-    out = t["initiative_state"]()["data"]
+    assert t["initiative_read"](refresh=False)["data"]["state"] == {"round": 1}
+    out = t["initiative_read"]()["data"]
     assert out["state"] is None and out["stale"]
     assert ws.sio.emitted[-1] == ("initiative.request_state", {})
     ws.wait_for_event.assert_called_once_with("initiative.state", 1)
@@ -518,7 +518,7 @@ def test_initiative_request_accepts_synchronous_new_broadcast():
         if event == "initiative.request_state":
             ws.sio.push("initiative.state", {"round": 2})
     ws.sio.emit = emit
-    out = build_tools(make_ctx(ws=ws))["initiative_state"]()["data"]
+    out = build_tools(make_ctx(ws=ws))["initiative_read"]()["data"]
     assert out["state"] == {"round": 2} and not out["stale"]
 
 

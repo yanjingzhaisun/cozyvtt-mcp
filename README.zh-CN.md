@@ -6,6 +6,16 @@
 
 为 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 打造并实测，但兼容任意 MCP 客户端（stdio 传输）。
 
+## v0.3.0 tool metadata and migration
+
+All 37 tools now expose parameter descriptions and MCP behavior annotations. Use
+`campaign_get()`, `initiative_read(refresh=true)`, and
+`token_hp_update(character_id=..., delta=...)`; the three previous names are removed.
+See [Breaking changes](CHANGELOG.md#breaking) for the old-to-new mapping.
+Defaults, routes, WS events, and result envelopes are unchanged. The current release
+has offline regression coverage; the live results below remain historical evidence.
+[Accuracy audit](ForAI/TDQS_Quality_Report.md) records wording corrections and limits.
+
 ## 兼容性
 
 | cozyvtt-mcp | CozyVTT | 说明 |
@@ -22,7 +32,7 @@
 - 文档原文读取保留 MIME 与 ETag。文本返回 `{mime_type,etag,content}`；PDF 存到项目 `downloads/<document_id>.pdf` 并返回 `{mime_type,etag,file_path,file_size}`。传 `etag` 走 `If-None-Match`；304 返回 `{not_modified:true}` 让调用方复用已有内容。downloads 已 gitignore；上游删除不会清本地副本。
 - REST 401 会使现有 WS 认证与战役缓存失效。新增事件：`character.updated`、`campaign.dm.transferred`、`roster.updated`、`dice.historyCleared`。DM 移交会清角色/系统缓存；失去成员资格会取消 WS 认证。
 - `character_validate` 始终附 `validation_reliable:false`：上游 v1.4.0 会丢弃校验失败并误报 `isValid:true`；旧服务器的可靠性未知。
-- token 尺寸为整数 1..10；`token_move` 拒绝旁观者。切图分别报告 REST 落库与 WS 广播两个状态。`initiative_state(refresh=true)` 主动拉取最新状态，超时报告未知。
+- token 尺寸为整数 1..10；`token_move` 拒绝旁观者。切图分别报告 REST 落库与 WS 广播两个状态。`initiative_read(refresh=true)` 主动拉取最新状态，超时报告未知。
 
 REST 路由缺失型 404（上游原文 `The requested resource does not exist`）返回「当前 CozyVTT 实例未提供此功能；请升级到支持该功能的版本后重试。」；其他 404 返回「资源不存在或当前账号无权访问（HTTP 404）：<上游 message>」。错误 `data` 保留状态码与上游细节。向旧上传路由传 DOCUMENT 类型可能 400——原样返回该错误，不会换类型/scope 重试。
 
@@ -30,11 +40,11 @@ REST 路由缺失型 404（上游原文 `The requested resource does not exist`�
 
 37 个工具，工具体结果统一返回 `{ok, data?, error?}`；参数校验由 FastMCP 处理：
 
-- **场次/战役**：`campaign_status`（role 与 owner 分开报告；新能力键可为 `unknown`）、`session_manage`、`session_list`、`session_notes_update`、`campaign_transfer_dm`（owner 收回也走它）、`map_list`、`map_switch`
+- **场次/战役**：`campaign_get`（role 与 owner 分开报告；新能力键可为 `unknown`）、`session_manage`、`session_list`、`session_notes_update`、`campaign_transfer_dm`（owner 收回也走它）、`map_list`、`map_switch`
 - **叙事**：`chat_send`（DM / PLAYER）、`chat_read`
-- **骰子**：`dice_roll`（服务器真随机；`is_secret=true`（线上字段 `secret`）为仅 DM 可见的暗骰，可经服务器日志审计）、`events_poll`（含骰史——DICE_ROLL 事件**不在**聊天历史里）
-- **Token/地图**：`token_add`、`token_move`、`token_hp`、`token_place_creature`、`creature_search`（SRD＋自定义怪库）
-- **战斗**：`initiative_manage`（add / remove / **roll** / **set** / **reorder** / start / next / end）、`initiative_state`（注意：CoC7e 先攻按 DEX 排序不骰——这是上游规则行为，`roll` 已相应门控）
+- **Dice**: `dice_roll` (server-authoritative; `is_secret=true` maps to `secret` and delivers to the roller and DMs on v1.4.0), `events_poll` (recent buffered events, not durable history; DICE_ROLL events are absent from chat history)
+- **Token/地图**：`token_add`、`token_move`、`token_hp_update`、`token_place_creature`、`creature_search`（SRD＋自定义怪库）
+- **战斗**：`initiative_manage`（add / remove / **roll** / **set** / **reorder** / start / next / end）、`initiative_read`（注意：CoC7e 先攻按 DEX 排序不骰——这是上游规则行为，`roll` 已相应门控）
 - **角色**：`character_list`、`character_get`、`character_create`、`character_validate`、`character_update`（规则数值由 agent 计算，桥只负责写值）
 - **文档**：`document_upload`、`document_create`、`document_list`、`campaign_document_list`、`document_read`、`document_update`、`document_share`、`document_unshare`、`document_delete`
 - **Saved Rolls**：`saved_roll_list`、`saved_roll_create`、`saved_roll_update`、`saved_roll_delete`（按用户×战役私有；每用户每战役 50 条，表达式服务器校验）
@@ -50,13 +60,13 @@ REST 路由缺失型 404（上游原文 `The requested resource does not exist`�
 | `initiative_manage action=roll` | `DND_5E`、`PATHFINDER_2E`、`SHADOWRUN_6E` | 服务器按系统推导先攻骰式；CoC7e 根本不骰（DEX 排序） |
 | `character_hitdice_spend` | `DND_5E` | 仅本地系统门控。WS 无可靠能力探测手段；发送后永远是 pending 口径。 |
 
-被门控的调用返回明确的 `{ok: false, error}` 说明放行系统，而不是发出一个服务器会忽略或误解的事件。未设 `gameSystem` 的（flexible）战役 fail-closed。未指定 `source` 时，非 5e 战役只搜 `custom`；5e 战役可搜两种来源。`campaign_status().features` 报告当前战役可用的门控能力。
+被门控的调用返回明确的 `{ok: false, error}` 说明放行系统，而不是发出一个服务器会忽略或误解的事件。未设 `gameSystem` 的（flexible）战役 fail-closed。未指定 `source` 时，非 5e 战役只搜 `custom`；5e 战役可搜两种来源。`campaign_get().features` 报告当前战役可用的门控能力。
 
 ## 架构
 
 ```
 MCP client (stdio)
-  └─ server.py (FastMCP, lazy init, non-blocking self-check)
+  └─ server.py (FastMCP, lazy init, synchronous first-call self-check)
       ├─ auth.py        — rememberMe login, 10-min keepalive, 3-min re-login spacing, 429 backoff
       ├─ client.py      — REST wrapper: one 401→re-login→retry, 429 exponential backoff (1/2/4s, ≤3)
       ├─ ws_listener.py — socket.io listener, 500-event ring buffer, one reconnect worker
@@ -65,13 +75,13 @@ MCP client (stdio)
 
 设计要点：
 
-- **骰子纪律**：agent 永不接触随机数。所有骰子由服务器生成、全桌可见、持久化。暗骰仅 DM 可见，但局后可审计。
+- **Dice discipline**: rolls are generated and persisted by the server. Public results go to the table; reviewed v1.4.0 sends secret results to the roller and DMs. The bridge provides recent buffered events, not a durable roll-history query.
 - **规则在桥外**：技能检定、SAN 损失、伤害——由 agent/GM 计算，桥只做公证骰与写值。桥对规则系统无关。
 - `token_move` 走 REST PUT；服务器检查 DM/controlledBy 权限，桥额外拒绝旁观者。REST 落库不代表有 `map.changed` 广播。`map_switch` 先 REST 落库再显式发 WS `map.change`；WS 失败不影响已成功的 REST 结果，也绝不重放。
 
 ## 结果与更新契约
 
-- `dice_roll`、`chat_send`、`token_hp`、`initiative_manage`、`character_hitdice_spend` 返回 `sent: true`、`confirmed: false`、`status: "pending"`。业务广播与 `system.error` 用 `events_poll` 读；不要盲目重放写操作。两条基线都没有关联 ACK。骰子可带 `purpose` 与 `character_name`（线上 `characterName`）用于 Custom Roll 展示。Hit Dice 的花费、骰骰、回血是三个独立操作，不是事务；旧服务器可能静默忽略花费事件。
+- `dice_roll`、`chat_send`、`token_hp_update`、`initiative_manage`、`character_hitdice_spend` 返回 `sent: true`、`confirmed: false`、`status: "pending"`。业务广播与 `system.error` 用 `events_poll` 读；不要盲目重放写操作。两条基线都没有关联 ACK。骰子可带 `purpose` 与 `character_name`（线上 `characterName`）用于 Custom Roll 展示。Hit Dice 的花费、骰骰、回血是三个独立操作，不是事务；旧服务器可能静默忽略花费事件。
 - `events_poll` 最早未读优先。保存 `next_seq` 作为下次 `since`；`latest_seq` 是其兼容别名。`high_water_seq` 是缓冲高水位，不是分页游标。注意检查 `gap`、`cursor_reset`、`has_more`、`connected`、`authenticated`。
 - `character_update(character_id, data={"data": {"hp": {"current": 5}}})` 先递归合并卡面字段再 PUT。未指定的字段保留；数组/标量整体替换，`null` 为显式置空。顶层字段为 `name`、`data`、`tokenImageUrl`。本桥进程内串行化更新；浏览器并发保存仍需上游乐观锁。
 - `character_create` 先建卡、查 roster、确认未入列才 assign。assign 失败时错误信息带已建角色 ID：请在 UI 里 assign 该卡，别再建一张。CoC 的 conditions/Mythos/spells/appearance/notes 与 DND 的新旧生命骰字段在合并中都能存活；Keeper notes 对战役成员不保密。
@@ -92,6 +102,22 @@ git clone https://github.com/yanjingzhaisun/cozyvtt-mcp.git
 cd cozyvtt-mcp
 uv sync   # 或: python -m venv .venv && .venv/bin/pip install fastmcp requests "python-socketio[client]" websocket-client
 ```
+
+### Docker (stdio)
+
+```bash
+docker build -t cozyvtt-mcp:0.3.0 .
+docker run --rm -i --env-file /path/to/cozyvtt.env cozyvtt-mcp:0.3.0
+```
+
+Use `-i` to keep stdin open; MCP uses stdin/stdout, without a network port or TTY.
+The image installs only compatible, hash-checked runtime wheels from `uv.lock`,
+including fastmcp, requests, python-socketio[client], and websocket-client. No editable
+package install or dependency re-resolution is performed. Credentials are supplied
+at runtime. Without any COZYVTT variables, `initialize` and `tools/list` still work;
+only business tool calls initialize authentication. Mount upload files inside the
+container and pass those container paths to `document_upload`. Mount `/app/downloads`
+if binary downloads must survive container removal. No Docker build was run locally.
 
 ## 配置
 
@@ -144,7 +170,7 @@ COZYVTT_SMOKE=1 COZYVTT_URL=... COZYVTT_EMAIL=... COZYVTT_PASSWORD=... \
 ## 排障
 
 - **日志**：`logs/cozyvtt-mcp.log`（auth 事件、WS 状态、工具调用；绝不含密码）
-- **反复 401**：上游 auth 限流 5 次登录 / 15 分钟 / IP。桥的重登间隔 ≥3 分钟；失败尝试也进冷却，`Retry-After` 可延长；窗口过后请求/后台恢复会重试
+- **Repeated 401**: reviewed v1.4.0 limits failed credential attempts to 5 per 15 minutes/IP. Successful credential requests do not count there; older accounting is unverified. The bridge enforces a re-login interval of at least 3 minutes, including failed attempts; Retry-After may extend it.
 - **`events_poll` 为空**：可能只是没有新事件。检查 `connected`、`authenticated`、`last_error`、`connection_error`；单一 WS 工作线程会重连断开的连接。初始化失败有 180 秒冷却，过后可不重启重试
 - **CoC7e 先攻不骰骰**：上游行为——CoC7e 先攻按 DEX 排序，本来就不产生骰子
 

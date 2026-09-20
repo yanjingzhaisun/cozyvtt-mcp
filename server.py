@@ -36,7 +36,24 @@ async def lifespan(server):
             await asyncio.to_thread(ctx.close)
 
 
-mcp = FastMCP("cozyvtt", lifespan=lifespan)
+mcp = FastMCP(
+    "cozyvtt",
+    lifespan=lifespan,
+    instructions=(
+        "Operate the configured CozyVTT campaign as the authenticated account; "
+        "upstream resource permissions apply to every tool. Discovery is offline; "
+        "the first business call lazily logs in. Upstream authentication allows "
+        "5 failed attempts per 15 minutes per IP on reviewed v1.4.0; "
+        "initialization and re-login failures "
+        "have a 180-second cooldown, extended when required by Retry-After. "
+        "Do not loop on authentication failures. Tool-body results use {ok,data?,error?}; "
+        "HTTP errors retain status/upstream diagnostics, while argument validation is "
+        "an MCP error. WS writes report pending, never a business ACK: inspect "
+        "events_poll and state before taking further action. Annotations describe "
+        "resource effects, not guaranteed delivery; document_read also caches binary "
+        "files locally. No tool performs game-rule calculations for the caller."
+    ),
+)
 
 
 def get_ctx() -> Ctx:

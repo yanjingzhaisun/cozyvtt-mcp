@@ -1,10 +1,10 @@
-# cozyvtt-mcp — SPEC v2 (v0.2.0, 2026-09-17)
+# cozyvtt-mcp — SPEC v2 (v0.3.0, 2026-09-21)
 
 A Python FastMCP stdio bridge for CozyVTT, fixed to one campaign, allowing an AI DM/KP to read and write game state through the API. Dual baselines: CozyVTT **v1.2.2 / v1.4.0**. This specification describes bridge behavior; when upstream v1.4.0 documentation and source disagree, the source takes precedence. The adaptation follows the R1 report, `cozyvtt-v1.4.0-adaptation.md`, sections 3–8 and 11, and the R2 HUMAN DECISIONS.
 
 ## 0. Project conventions and compatibility
 
-- Version: 0.2.0; tools: 20 → **37** (17 additions); no redundant `saved_roll_get`.
+- Version: 0.3.0; tools: **37**; no redundant `saved_roll_get`.
 - Python ≥3.11, FastMCP stdio, requests + python-socketio; dependencies managed with uv.
 - One `COZYVTT_CAMPAIGN_ID`; all campaign-specific tools use this campaign. Document asset scopes may explicitly specify campaign_id; CAMPAIGN defaults to the current campaign when omitted.
 - The bridge handles API protocols and state transfer only. The caller calculates CoC success levels, SAN loss, healing, and other rules. The character's own gameSystem determines the sheet schema; the campaign system must not be used to rewrite character data.
@@ -15,7 +15,23 @@ A Python FastMCP stdio bridge for CozyVTT, fixed to one campaign, allowing an AI
 | v1.2.2 | Retain the original 20 tools; read only the latest chat page unless the response supplies nextCursor; degrade new REST features based on precise errors | Old snapshots and existing offline regressions |
 | v1.4.0 | 37 tools; Documents / Saved Rolls / DM transfer / Hit Dice / session history; cursor pagination | Source contracts + offline HTTP/WS mocks; no instance connection during this adaptation |
 
-Do not infer the version from an arbitrary 404, an empty list, or a WS timeout. New API capabilities in `campaign_status.features` default to `unknown`. Hit Dice is false outside DND_5E and remains unknown in DND_5E: passing the system gate does not establish that the server implements the event.
+Do not infer the version from an arbitrary 404, an empty list, or a WS timeout. New API capabilities in `campaign_get.features` default to `unknown`. Hit Dice is false outside DND_5E and remains unknown in DND_5E: passing the system gate does not establish that the server implements the event.
+
+### 0.1 Tool metadata and migration
+
+Every parameter has an Annotated/Pydantic Field description, and every tool has
+explicit readOnlyHint/destructiveHint/idempotentHint/openWorldHint annotations.
+Descriptions explain alternatives, permissions, side effects, and error boundaries.
+Use campaign_get, initiative_read, and token_hp_update; the previous names have no
+aliases (see CHANGELOG Breaking). These are metadata/name changes only: all parameter
+defaults, validation, channels, and result envelopes remain unchanged.
+
+Read-only annotations describe upstream resources. document_read additionally writes
+or replaces local binary downloads. Delete/unshare hints describe repeated resource
+effects, not identical success responses. Other writes conservatively avoid full-call
+idempotency promises. All tools may contact an external CozyVTT service. Shared auth
+limits are also disclosed in MCP initialize instructions, avoiding repetition in each
+tool. See [accuracy audit and evidence](ForAI/TDQS_Quality_Report.md).
 
 ## 1. Authentication and REST client
 
@@ -43,9 +59,11 @@ Do not infer the version from an arbitrary 404, an empty list, or a WS timeout. 
 
 ## 3. Rate limits and concurrency
 
+- Authentication: 5 failed credential attempts per 15 minutes/IP on the reviewed v1.4.0 source; successful credential requests do not count there. Older accounting is unverified; retain conservative cooldown behavior.
+
 - REST defaults to a global 300/min/IP limit. Handle 429 without spending quota on proactive probes.
 - Dice: 30/min/user. dice_roll queues calls serially with a minimum 2.1-second interval.
-- Document uploads and direct creation share an additional 30/min/user limit. The instance determines upload size limits, defaulting to 50 MiB; the bridge does not treat this default as an immutable cap.
+- Document uploads and direct creation share an additional limit, default 30/min/user (configurable upstream via ASSET_UPLOAD_RATE_LIMIT). The instance determines upload size limits, defaulting to 50 MiB; the bridge does not treat this default as an immutable cap.
 - Saved Rolls: 50 per user per campaign. Creation is serialized within this bridge; the server validates expressions and enforces the quota. Cross-client races remain possible; the bridge does not promise a hard database constraint.
 - character_update serializes read–merge–write within this process. Upstream has no If-Match or atomic patch, so concurrent browser saves may still overwrite data.
 
@@ -55,7 +73,7 @@ Tool bodies return `{ok:bool,data?:any,error?:string}`. FastMCP handles argument
 
 | Tool | Channel | Endpoint/event | Parameters and result summary |
 |---|---|---|---|
-| `campaign_status` | REST | GET /api/campaigns/{id} + /health (fallback /api/auth/ping) | No parameters; health/campaign/current_map/me/features/feature_evidence/role/owner |
+| `campaign_get` | REST | GET /api/campaigns/{id} + /health (fallback /api/auth/ping) | No parameters; health/campaign/current_map/me/features/feature_evidence/role/owner |
 | `chat_send` | WS | chat.message | Nonempty content≤2000, type=DM/PLAYER; pending |
 | `chat_read` | REST | GET /api/campaigns/{id}/messages | limit:int=20[1..100], cursor:str/null; messages+pagination unchanged |
 | `events_poll` | Buffer | Subscribed events above | since:int=0≥0, limit:int=100[1..500]; pagination/role/stale state |
@@ -64,8 +82,8 @@ Tool bodies return `{ok:bool,data?:any,error?:string}`. FastMCP handles argument
 | `map_switch` | REST+WS | PUT /api/campaigns/{id}/maps/{mapId}/set-current → map.change | map_id; report persisted and broadcast_pending separately |
 | `token_add` | REST | POST /api/campaigns/{id}/maps/{mapId}/tokens | map_id/name/image_url/x/y, character_id='', width/height:int1..10=1, layer='token', visible=true, controlled_by=null |
 | `token_move` | REST | PUT /api/campaigns/{id}/maps/{mapId}/tokens/{tokenId} | map_id/token_id/x/y → position; reject SPECTATOR/unknown role; persisted with broadcast unconfirmed |
-| `token_hp` | WS | character.hp.update | character_id/delta; pending |
-| `initiative_state` | WS read+buffer | initiative.request_state → initiative.state | refresh:bool=true; only new events count as a refresh, timeout returns state=null/stale=true |
+| `token_hp_update` | WS | character.hp.update | character_id/delta; pending |
+| `initiative_read` | WS read+buffer | initiative.request_state → initiative.state | refresh:bool=true; only new events count as a refresh, timeout returns state=null/stale=true |
 | `initiative_manage` | WS | initiative.add/remove/roll/set/reorder/start/next/end | action, token_id/map_id/value/ordered_token_ids/expression/character_name; roll has a system gate |
 | `character_list` | REST | GET /api/campaigns/{id}/characters | roster unchanged |
 | `character_get` | REST | GET /api/characters/{characterId} | character_id; full sheet, preserving unknown fields |
@@ -96,11 +114,11 @@ Tool bodies return `{ok:bool,data?:any,error?:string}`. FastMCP handles argument
 ### 4.1 System gates and capability status
 
 - `creature_search source=srd`: DND_5E. When source is omitted, non-5e/flexible campaigns use custom.
-- `initiative_manage action=roll`: DND_5E / PATHFINDER_2E / SHADOWRUN_6E. CoC7e uses DEX order; use add/set/start.
+- `initiative_manage action=roll`: DND_5E / PATHFINDER_2E / SHADOWRUN_6E. CoC7e uses DEX order; use add/set/start. Structural actions are DM-only; reviewed v1.4.0 permits controlled-player rolls for an existing combatant before combat, subject to additional upstream checks. This is not a new bridge permission gate.
 - `character_hitdice_spend`: only `require_system(DND_5E)`; flexible campaigns fail. There is no reliable WS capability probe, no additional version rejection, and no fabricated confirmation of spending.
 - Other tools are not restricted by game system; the server validates membership, role, and resource permissions.
-- `campaign_status.features` retains srd_creature_library/homebrew_creature_library/initiative_roll and adds documents/saved_rolls/dm_transfer/hitdice_spend. The first three new API capabilities are unknown; Hit Dice reports false/unknown according to the system gate. Unknown never establishes support.
-- `campaign_status.role` comes from userRole or the current user's membership. owner is `{id,is_me}`, with null where evidence is missing. Never treat the owner as DM by inference.
+- `campaign_get.features` retains srd_creature_library/homebrew_creature_library/initiative_roll and adds documents/saved_rolls/dm_transfer/hitdice_spend. The first three new API capabilities are unknown; Hit Dice reports false/unknown according to the system gate. Unknown never establishes support.
+- `campaign_get.role` comes from userRole or the current user's membership. owner is `{id,is_me}`, with null where evidence is missing. Never treat the owner as DM by inference.
 
 ### 4.2 Breaking chat_read migration
 
@@ -125,8 +143,9 @@ Older instances without nextCursor allow only the latest page. Subsequent cursor
 - Saved Rolls are DiceMacro, strictly per-user/per-campaign; any member can manage their own macros. List returns complete Macros. Callers cannot impersonate others with userId; there is no `saved_roll_get` or invented execute endpoint. The server parses expressions when saving; the bridge does not roll locally. To use a macro, pass expression to dice_roll.
 - DM transfer and owner reclaim use the same PUT dm; for reclaim, user_id is the owner's own ID. The former DM becomes PLAYER, the new DM must already be a member, and ownerId remains unchanged. Clear caches after REST success; do not simulate transfer with two role updates.
 - `character_hitdice_spend {characterId,index}` spends one remaining use. Success normally broadcasts character.updated; failure appears as error → system.error. Dispatch returns only: `Operation sent; the result is not yet confirmed. Read events or state before taking further action; do not repeat the operation.`
+- On reviewed v1.4.0, secret rolls are delivered to the roller and DMs; a player roller sees their own secret result. No new live recipient-isolation verification was performed.
 - Custom Roll reuses `dice_roll(expression,is_secret,purpose,character_name)`, mapping to characterName; there is no new event. The name is a display label, not an authorization credential.
-- Hit Dice spending, rolling, and token_hp healing are three separate steps with no transaction or ACK. Older instances may silently ignore the new WS event. A timeout cannot establish support/failure or justify an automatic resend.
+- Hit Dice spending, rolling, and token_hp_update healing are three separate steps with no transaction or ACK. Older instances may silently ignore the new WS event. A timeout cannot establish support/failure or justify an automatic resend.
 
 ### 4.5 Character, map, and session changes
 
@@ -137,7 +156,7 @@ Older instances without nextCursor allow only the latest page. Subsequent cursor
 - Character creation accepts name1..200 and optional complete data. GET roster after creation; skip assign if already assigned, otherwise use the original assign path. Failures include created/assigned/character and warn against duplicate creation.
 - token_add width/height are integers1..10; controlled_by → controlledBy. token_move requires a known DM/PLAYER role before writing and rejects SPECTATOR/unknown; the server then checks DM or controlledBy=current user. REST token updates do not guarantee broadcasts.
 - map_switch saves through REST, then sends WS map.change. persisted=true/broadcast_pending=true still does not confirm broadcast success. WS dispatch failure returns ok=false with persisted=true/broadcast_pending=false/confirmed=false; do not roll back or replay REST.
-- initiative_state(refresh=true) sends request_state and waits at most 2 seconds for a new event. A timeout means unknown state, not proof that combat has not started. refresh=false may return cached state marked stale.
+- initiative_read(refresh=true) sends request_state and waits at most 2 seconds for a new event. A timeout means unknown state, not proof that combat has not started. refresh=false may return cached state marked stale.
 - session_manage end sends saveState/notes; pause/end first resolve activeSession.id. notes is limited to 2000 characters and visible to the whole campaign. Empty end notes do not clear existing content; session_notes_update clears notes when empty after trimming. Lists may include unfinished sessions; recap edits do not broadcast or end the session again.
 
 ## 5. Fallback and error rules

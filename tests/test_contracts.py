@@ -420,7 +420,7 @@ def test_read_smoke_rejects_success_envelope_without_business_data():
     from scripts.smoke import valid_result
     assert not valid_result("map_list", {"ok": True, "data": {"_raw": "<html>"}}, CID)
     assert valid_result("map_list", {"ok": True, "data": {"maps": []}}, CID)
-    assert not valid_result("campaign_status", {"ok": True, "data": {"campaign": {"id": None}}}, CID)
+    assert not valid_result("campaign_get", {"ok": True, "data": {"campaign": {"id": None}}}, CID)
 
 
 def test_secret_contract_routes_to_dm_only_for_dm_roller():

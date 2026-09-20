@@ -5,7 +5,7 @@ KEYWORD_CN: 虚拟桌面,模型上下文协议,智能体入口,任务路由
 
 # AI developer entry
 
-**Preserve the bridge contract before extending it.** cozyvtt-mcp is a Python FastMCP **stdio** bridge exposing **37 tools** for an AI DM/KP to operate one CozyVTT campaign. The current release is v0.2.1; read [pyproject.toml](../pyproject.toml) for package metadata and [README compatibility](../README.md#compatibility) for tested upstream baselines. The bridge transports server-authoritative rolls and state; it does not implement game-rule calculations.
+**Preserve the bridge contract before extending it.** cozyvtt-mcp is a Python FastMCP **stdio** bridge exposing **37 tools** for an AI DM/KP to operate one CozyVTT campaign. The current release is v0.3.0; read [pyproject.toml](../pyproject.toml) for package metadata and [README compatibility](../README.md#compatibility) for tested upstream baselines. The bridge transports server-authoritative rolls and state; it does not implement game-rule calculations.
 
 ## Start here
 
@@ -58,5 +58,7 @@ This is a navigation checklist, not a second copy of the rules. Every change MUS
 - Preserve fallback distinctions, partial outcomes, and content/validation boundaries: **P10–P12**.
 - Supply evidence and maintain contracts, release records, upstream diffs, and English documentation together: **P13–P17**.
 - Use offline regression checks and stay inside the authorized scope: **P18**.
+
+For v0.3.0 metadata decisions, accuracy findings, and offline verification, see [TDQS_Quality_Report.md](TDQS_Quality_Report.md).
 
 Current baseline: 176 offline tests. Tool or behavior changes may legitimately change that count; never delete coverage merely to retain it. Commands, limits, and evidence reporting are defined once in P18.

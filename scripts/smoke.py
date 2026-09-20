@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Read-only smoke test: campaign_status / chat_read / map_list / character_list / creature_search。
+"""Read-only smoke test: campaign_get / chat_read / map_list / character_list / creature_search.
 
 Usage:
     COZYVTT_SMOKE=1 COZYVTT_URL=... COZYVTT_EMAIL=... COZYVTT_PASSWORD=... \
     COZYVTT_CAMPAIGN_ID=... .venv/bin/python scripts/smoke.py
 
-Log in once (auth limit: 5 requests/15min/IP); exit 0 if all checks pass.
+Log in once (v1.4.0 auth limit: 5 failed requests/15min/IP); exit 0 if all checks pass.
 """
 import os
 import sys
@@ -22,16 +22,18 @@ class FakeMCP:
     def __init__(self):
         self.tools = {}
 
-    def tool(self, fn):
-        self.tools[fn.__name__] = fn
-        return fn
+    def tool(self, fn=None, **kwargs):
+        def register(fn):
+            self.tools[fn.__name__] = fn
+            return fn
+        return register(fn) if fn is not None else register
 
 
 def valid_result(name, result, campaign_id):
     if not result.get("ok") or not isinstance(result.get("data"), dict):
         return False
     data = result["data"]
-    if name == "campaign_status":
+    if name == "campaign_get":
         campaign = data.get("campaign")
         return (isinstance(campaign, dict) and campaign.get("id") == campaign_id
                 and bool(campaign.get("status")) and data.get("health", {}).get("reachable") is True)
@@ -73,7 +75,7 @@ def main() -> int:
         print(f"[login] ok, user={auth.user.get('displayName') if auth.user else '?'}")
 
         checks = [
-            ("campaign_status", lambda: tools["campaign_status"]()),
+            ("campaign_get", lambda: tools["campaign_get"]()),
             ("chat_read", lambda: tools["chat_read"](limit=5)),
             ("map_list", lambda: tools["map_list"]()),
             ("character_list", lambda: tools["character_list"]()),
@@ -85,7 +87,7 @@ def main() -> int:
             if valid_result(name, r, cid):
                 data = r["data"]
                 hint = ""
-                if name == "campaign_status":
+                if name == "campaign_get":
                     c = data.get("campaign", {})
                     hint = f"Campaign {c.get('name')} status={c.get('status')} map={c.get('currentMapId')}"
                 elif name == "map_list":

@@ -17,7 +17,7 @@ Failures hidden behind success envelopes cause unsafe retries and false game sta
 
 ### G02. Validate external boundaries
 
-Agents, HTTP responses, file paths, and WS payloads are external inputs. MUST validate required types, bounds, enums, response shape, and destination paths at the relevant boundary before consuming or overwriting state. Keep the `/health` reachability exception separate from business-response validation; HTML or a missing object must not become verified business data. Preserve unknown character fields and diagnostic details rather than silently stripping them. See [client.py:90](../client.py#L90), [character_update](../tools/write_tools.py#L170), and P12.
+Agents, HTTP responses, file paths, and WS payloads are external inputs. MUST validate required types, bounds, enums, response shape, and destination paths at the relevant boundary before consuming or overwriting state. Keep the `/health` reachability exception separate from business-response validation; HTML or a missing object must not become verified business data. Preserve unknown character fields and diagnostic details rather than silently stripping them. See [client.py:90](../client.py#L90), [character_update](../tools/write_tools.py#L437), and P12.
 
 ### G03. Protect network credentials
 
@@ -25,7 +25,7 @@ Unscoped Cookies and truncated secret logs still leak credentials. MUST use the 
 
 ### G04. Lock shared state and write files atomically
 
-FastMCP tools, keepalive, and WS callbacks can run concurrently. MUST preserve explicit ownership and lock ordering for context publication, Session mutation, WS state, character merges, and dice sends. Do not hold cache locks across network I/O or introduce callback/worker deadlocks. Write downloads to a temporary file in the target directory, atomically replace the destination, and clean up temporary files; a process lock is not a cross-client transaction. See [Ctx](../tools/__init__.py#L47) and [document_read](../tools/document_tools.py#L114).
+FastMCP tools, keepalive, and WS callbacks can run concurrently. MUST preserve explicit ownership and lock ordering for context publication, Session mutation, WS state, character merges, and dice sends. Do not hold cache locks across network I/O or introduce callback/worker deadlocks. Write downloads to a temporary file in the target directory, atomically replace the destination, and clean up temporary files; a process lock is not a cross-client transaction. See [Ctx](../tools/__init__.py#L47) and [document_read](../tools/document_tools.py#L255).
 
 ### G05. Isolate side effects
 
@@ -51,7 +51,7 @@ Anchors: [ws_listener.py:278](../ws_listener.py#L278), [tests/test_contracts.py:
 
 **MUST:** map the tool parameter `is_secret` to the wire field **`secret`**, never `isSecret`. Obtain field names, event names, authorization, and response shapes from the pinned upstream source rather than a guessed translation, stale document, or permissive fake. Preserve upstream error/message values verbatim. Offline field/routing checks are not proof that a real PLAYER cannot receive a secret roll; that claim needs an independently observed, authorized player connection.
 
-Anchors: [tools/write_tools.py:39](../tools/write_tools.py#L39), [tests/test_contracts.py:119](../tests/test_contracts.py#L119). Upstream evidence: `/opt/data/cache/CozyVTT-v1.4.0/backend/src/websocket/handlers/dice.ts:20` declares `secret`, and line 27 reads it. Follow P13 for other versions.
+Anchors: [tools/write_tools.py:72](../tools/write_tools.py#L72), [tests/test_contracts.py:119](../tests/test_contracts.py#L119). Upstream evidence: `/opt/data/cache/CozyVTT-v1.4.0/backend/src/websocket/handlers/dice.ts:20` declares `secret`, and line 27 reads it. Follow P13 for other versions.
 
 ### P03. Character read-merge-write
 
@@ -59,7 +59,7 @@ Anchors: [tools/write_tools.py:39](../tools/write_tools.py#L39), [tests/test_con
 
 **MUST:** `character_update` reads the current card before patching sheet data, recursively merges dictionaries, and replaces arrays/scalars as whole values. `null` is explicit, not deletion. Never send the caller's partial sheet object as the replacement data. Keep top-level allowlisting, reject a missing/non-object current data value, preserve unknown fields, and hold the process character lock around read–merge–write. Use the character's own system; do not invent CoC Mythos synchronization or rewrite legacy Hit Dice fields. State the remaining cross-client lost-update risk honestly.
 
-Anchors: [merge_patch:11](../tools/write_tools.py#L11), [character_update:170](../tools/write_tools.py#L170), [tests/test_contracts.py:25](../tests/test_contracts.py#L25); [SPEC section 4.5](../SPEC.md#45-character-map-and-session-changes).
+Anchors: [merge_patch:16](../tools/write_tools.py#L16), [character_update:437](../tools/write_tools.py#L437), [tests/test_contracts.py:25](../tests/test_contracts.py#L25); [SPEC section 4.5](../SPEC.md#45-character-map-and-session-changes).
 
 ### P04. Single context initialization and recovery
 
@@ -67,7 +67,7 @@ Anchors: [merge_patch:11](../tools/write_tools.py#L11), [character_update:170](.
 
 **MUST:** serialize context construction and publication with the initialization lock so concurrent successful callers share one context. Clean up failed partial contexts, retain the monotonic retry deadline, and permit retry after cooldown instead of permanently caching a transient exception. Do not make REST-only tools depend on a healthy WS connection or open a connection just to list tools.
 
-Anchors: [server.py:42](../server.py#L42), [tests/test_server.py:29](../tests/test_server.py#L29), [tests/test_server.py:51](../tests/test_server.py#L51).
+Anchors: [server.py:59](../server.py#L59), [tests/test_server.py:29](../tests/test_server.py#L29), [tests/test_server.py:51](../tests/test_server.py#L51).
 
 ### P05. WS generations, fresh Cookies, and invalidation
 
@@ -99,7 +99,7 @@ Anchors: [auth.py:56](../auth.py#L56), [auth.py:111](../auth.py#L111), [client.p
 
 **MUST:** send rolls through `Ctx.send_dice`; keep its lock across the wait, actual `dice.roll` emit, and monotonic timestamp update. Preserve the **2.1-second** minimum actual-send interval. Do not move timestamp updates to tool entry or release the lock before emit. Do not locally roll dice to work around rate limits; no retry may silently duplicate a roll.
 
-Anchors: [tools/__init__.py:147](../tools/__init__.py#L147), [tools/write_tools.py:39](../tools/write_tools.py#L39), [tests/test_cozyvtt.py](../tests/test_cozyvtt.py).
+Anchors: [tools/__init__.py:147](../tools/__init__.py#L147), [tools/write_tools.py:72](../tools/write_tools.py#L72), [tests/test_cozyvtt.py](../tests/test_cozyvtt.py).
 
 ### P09. Initial state and broadcast coverage
 
@@ -107,7 +107,7 @@ Anchors: [tools/__init__.py:147](../tools/__init__.py#L147), [tools/write_tools.
 
 **MUST:** send `initiative.request_state` after each successful campaign authentication. A refresh waits for a new current-generation state; timeout means unknown, not “combat has not started.” Before adding an event, inspect the upstream broadcast sites and payloads, then align `LISTEN_EVENTS` with the bridge's documented supported broadcast set and add a buffer test. Preserve `token.moved`, `session.resumed`, and the v1.4 additions `character.updated`, `campaign.dm.transferred`, `roster.updated`, `dice.historyCleared`. Do not blindly subscribe to every upstream event or require optional payload fields.
 
-Anchors: [ws_listener.py:12](../ws_listener.py#L12), [on_authenticated:84](../ws_listener.py#L84), [initiative_state:111](../tools/read_tools.py#L111), [tests/test_v020.py:501](../tests/test_v020.py#L501). Upstream inventory and sender evidence: R1 report sections 7 and 9, located in the [index](00_Index.md#local-research-and-authoring-sources).
+Anchors: [ws_listener.py:12](../ws_listener.py#L12), [on_authenticated:84](../ws_listener.py#L84), [initiative_read:177](../tools/read_tools.py#L177), [tests/test_v020.py:501](../tests/test_v020.py#L501). Upstream inventory and sender evidence: R1 report sections 7 and 9, located in the [index](00_Index.md#local-research-and-authoring-sources).
 
 ### P10. Precise fallback and system gates
 
@@ -115,7 +115,7 @@ Anchors: [ws_listener.py:12](../ws_listener.py#L12), [on_authenticated:84](../ws
 
 **MUST:** use E-old only when HTTP 404 has the exact upstream message `The requested resource does not exist`; use E-resource for other 404s. Preserve status and upstream details; retain upload-type 400 rather than mislabeling it as a missing route. Report unproven capabilities as `unknown`, never guessed true. Gate system-dependent tools through `require_system`, including default creature-source selection. Hit Dice uses only the DND_5E system gate; after dispatch always return pending, with no version probe, timeout-based capability inference, or PUT simulation. Preserve chat_read's opaque cursor and latest-page-only fallback; never restore offset-based history.
 
-Anchors: [wrap:172](../tools/__init__.py#L172), [chat_read:61](../tools/read_tools.py#L61), [Hit Dice:67](../tools/campaign_tools.py#L67), [tests/test_v020.py:126](../tests/test_v020.py#L126). Upstream catch-all evidence: `/opt/data/cache/CozyVTT-v1.4.0/backend/src/server.ts:187`. Canonical messages and limits: [SPEC section 5](../SPEC.md#5-fallback-and-error-rules).
+Anchors: [wrap:172](../tools/__init__.py#L172), [chat_read:77](../tools/read_tools.py#L77), [Hit Dice:162](../tools/campaign_tools.py#L162), [tests/test_v020.py:126](../tests/test_v020.py#L126). Upstream catch-all evidence: `/opt/data/cache/CozyVTT-v1.4.0/backend/src/server.ts:187`. Canonical messages and limits: [SPEC section 5](../SPEC.md#5-fallback-and-error-rules).
 
 ### P11. Channels and partial outcomes
 
@@ -123,7 +123,7 @@ Anchors: [wrap:172](../tools/__init__.py#L172), [chat_read:61](../tools/read_too
 
 **MUST:** preserve the channels in [SPEC's tool table](../SPEC.md#4-tool-inventory-37-tools). Session lifecycle writes use REST with the resolved activeSession ID. After character creation, inspect the roster and assign when necessary; if assignment fails, return the created ID and explicit partial status, never create again. Map switching persists through REST before WS map.change and reports persistence separately from pending broadcast; WS failure must not replay or roll back the successful REST write. Hit Dice spending, rolling, and healing remain independent operations. DM transfer/reclaim uses its dedicated endpoint and invalidates cached roles; do not simulate it with two role edits.
 
-Anchors: [map_switch:56](../tools/write_tools.py#L56), [character_create:196](../tools/write_tools.py#L196), [session_manage:255](../tools/write_tools.py#L255), [DM transfer:57](../tools/campaign_tools.py#L57).
+Anchors: [map_switch:125](../tools/write_tools.py#L125), [character_create:485](../tools/write_tools.py#L485), [session_manage:603](../tools/write_tools.py#L603), [DM transfer:136](../tools/campaign_tools.py#L136).
 
 ### P12. Content and validation boundaries
 
@@ -131,7 +131,7 @@ Anchors: [map_switch:56](../tools/write_tools.py#L56), [character_create:196](..
 
 **MUST:** keep multipart upload separate from JSON and rewind streams on approved retries. Read by Content-Type, preserve ETag/304 semantics, and write binary content atomically to the controlled downloads directory; do not inline PDF bytes or convert them to `_raw` text. Preserve share/unshare/delete distinctions and per-user/per-campaign Saved Roll scope. Keep `character_validate.validation_reliable:false` and its explanation; never advertise it as a reliable validation gate. Do not turn HTTP 200 or an empty result into evidence beyond its actual contract.
 
-Anchors: [client.py:49](../client.py#L49), [document_read:114](../tools/document_tools.py#L114), [character_validate:143](../tools/read_tools.py#L143). Upstream validation-defect evidence: R1 report section 4; detailed bridge contracts: [SPEC section 4.3](../SPEC.md#43-documents) and [4.5](../SPEC.md#45-character-map-and-session-changes).
+Anchors: [client.py:49](../client.py#L49), [document_read:255](../tools/document_tools.py#L255), [character_validate:247](../tools/read_tools.py#L247). Upstream validation-defect evidence: R1 report section 4; detailed bridge contracts: [SPEC section 4.3](../SPEC.md#43-documents) and [4.5](../SPEC.md#45-character-map-and-session-changes).
 
 ### P13. Evidence and source precedence
 
@@ -189,6 +189,6 @@ The [authoring guide](00_Index.md#local-research-and-authoring-sources) supplies
 
 **MUST:** run the authorized offline suite with `.venv/bin/python -m pytest -q`, retaining responses/FakeSIO isolation and the real-TCP guard in [tests/conftest.py](../tests/conftest.py). Preserve real FastMCP schema/stdio checks, deterministic lifecycle/cooldown regressions, and failure-path evidence. The baseline at this documentation addition is **176 tests**; report the actual count and Python version used, not an assumed environment. Do not install/update dependencies or access a network when the task is offline.
 
-If the task must leave local runtime files untouched, run that exact command in an isolated copy of the current working tree and existing environment; report the isolation explicitly. The stdio test invokes main(), which creates logs, so running it in the original tree is not file-neutral ([tests/test_server.py:81](../tests/test_server.py#L81), [server.py:80](../server.py#L80)).
+If the task must leave local runtime files untouched, run that exact command in an isolated copy of the current working tree and existing environment; report the isolation explicitly. The stdio test invokes main(), which creates logs, so running it in the original tree is not file-neutral ([tests/test_server.py:81](../tests/test_server.py#L81), [server.py:97](../server.py#L97)).
 
 Before committing, check the requested file scope, internal links/front matter when relevant, `git diff --check`, and the staged diff. Do not touch config.yaml/MCP registration, sibling projects, real campaigns, versions, or release state unless the task calls for it. Keep live smoke separate and explicitly authorized; never import probe scripts as a test shortcut. After committing, inspect the commit's file list and working-tree status, report limitations, and stop at the authorized delivery boundary.
