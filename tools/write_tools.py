@@ -653,3 +653,143 @@ def register(mcp, get_ctx) -> None:
             if notes is not None:
                 payload["notes"] = notes
         return ctx.client.put(f"{path}/sessions/{active['id']}/{action}", payload)
+
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=False,
+        idempotentHint=False, openWorldHint=True,
+    ))
+    @wrap
+    def map_create(
+        name: Annotated[
+            str, Field(description=(
+                'Nonblank display name for the new map; upstream trims it.'
+            )),
+        ],
+        image_url: Annotated[
+            str, Field(description=(
+                'Existing map image asset ID or URL; upstream checks asset access. No file '
+                'upload.'
+            )),
+        ],
+        width: Annotated[
+            int, Field(ge=1, description=(
+                'Map width as a positive integer, in grid units.'
+            )),
+        ],
+        height: Annotated[
+            int, Field(ge=1, description=(
+                'Map height as a positive integer, in grid units.'
+            )),
+        ],
+        grid_size: Annotated[
+            int, Field(ge=1, description=(
+                'Positive integer pixels per grid square; defaults to 50.'
+            )),
+        ] = 50,
+        spirit_layer_url: Annotated[
+            str | None, Field(description=(
+                'Optional existing spirit-layer image asset ID or URL; null omits it.'
+            )),
+        ] = None,
+    ) -> dict:
+        """Create a campaign map using existing image assets (DM only).
+        Use map_list to inspect existing maps and map_switch to activate one; creation
+        does not switch the current map. This creates a map with empty tokens and
+        annotations, not an uploaded image. Upstream checks image access and normalizes
+        asset URLs. Each accepted call creates another map; do not blindly retry an
+        uncertain result. Returns upstream {map} in data without a broadcast receipt.
+        REST validation and permission errors retain upstream diagnostics.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
+        if not name.strip() or not image_url:
+            raise ValueError("name must be nonblank and image_url must not be empty")
+        for field, value in (("width", width), ("height", height), ("grid_size", grid_size)):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{field} must be a positive integer")
+        ctx = get_ctx()
+        payload = {"name": name, "imageUrl": image_url, "width": width,
+                   "height": height, "gridSize": grid_size}
+        if spirit_layer_url is not None:
+            payload["spiritLayerUrl"] = spirit_layer_url
+        return ctx.client.post(f"/api/campaigns/{ctx.campaign_id}/maps", payload)
+
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=True,
+        idempotentHint=True, openWorldHint=True,
+    ))
+    @wrap
+    def map_delete(
+        map_id: Annotated[
+            str, Field(description=(
+                'Map ID in the configured campaign to delete; must not be the current map.'
+            )),
+        ],
+    ) -> dict:
+        """Delete a campaign map and its stored tokens and map state (DM only).
+        Use map_list to inspect maps first; use map_switch to select another current map
+        before deletion. Upstream rejects deletion of the current map with HTTP 400.
+        Use token_delete to remove only one token instead of the entire map. Deletion
+        is destructive and has no undo tool. Repeating leaves the map absent but may
+        return a not-found error. Returns upstream {message} in data without a broadcast
+        receipt; REST permission and resource errors retain upstream diagnostics.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
+        from tools.document_tools import segment
+        ctx = get_ctx()
+        return ctx.client.delete(f"/api/campaigns/{ctx.campaign_id}/maps/{segment(map_id)}")
+
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=True,
+        idempotentHint=True, openWorldHint=True,
+    ))
+    @wrap
+    def token_delete(
+        map_id: Annotated[
+            str, Field(description=(
+                'Map ID containing the token in the configured campaign.'
+            )),
+        ],
+        token_id: Annotated[
+            str, Field(description=(
+                'Map token ID to remove, not a character sheet ID.'
+            )),
+        ],
+    ) -> dict:
+        """Delete one token from a campaign map (DM only).
+        Use token_move to reposition a token instead. Use token_hp_update for a signed
+        sheet HP adjustment through WS: that tool takes a character ID, whereas this
+        tool takes a map token ID. Deletion removes the placed token, not its linked
+        character sheet or HP, and does not manage initiative entries. It is destructive
+        and has no undo tool. Repeating leaves the token absent but may return a not-found
+        error. Returns upstream {message} in data without a broadcast receipt; REST
+        permission and resource errors retain upstream diagnostics.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
+        from tools.document_tools import segment
+        ctx = get_ctx()
+        return ctx.client.delete(
+            f"/api/campaigns/{ctx.campaign_id}/maps/{segment(map_id)}/tokens/{segment(token_id)}")
+
+    @mcp.tool(annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=True,
+        idempotentHint=True, openWorldHint=True,
+    ))
+    @wrap
+    def character_delete(
+        character_id: Annotated[
+            str, Field(description=(
+                'Character sheet ID owned by the authenticated user; not a map token ID.'
+            )),
+        ],
+    ) -> dict:
+        """Delete a character sheet permanently (owner only).
+        Use character_get to inspect the sheet first and character_update to edit it;
+        use token_delete to remove only a placed map token. This deletes the sheet
+        itself, not just its campaign assignment. DM authority alone does not grant
+        deletion rights. It has no undo tool and does not remove map tokens. Repeating
+        leaves the sheet absent but may return a not-found error. Returns upstream
+        {message} in data; REST permission and resource errors retain diagnostics.
+        Returns {ok:true,data} on success; tool-body failures return {ok:false,error} with optional
+        diagnostic data. Argument-schema errors are MCP errors."""
+        from tools.document_tools import segment
+        return get_ctx().client.delete(f"/api/characters/{segment(character_id)}")

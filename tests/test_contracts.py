@@ -338,7 +338,7 @@ def test_real_fastmcp_schema_and_result():
         register_all(mcp, lambda: ctx)
         async with Client(mcp) as client:
             listed = await client.list_tools()
-            assert len(listed) == 37
+            assert len(listed) == 41
             dice = next(t for t in listed if t.name == "dice_roll")
             assert "is_secret" in dice.input_schema["properties"]
             result = await client.call_tool("dice_roll", {"expression": "1d20", "is_secret": True})

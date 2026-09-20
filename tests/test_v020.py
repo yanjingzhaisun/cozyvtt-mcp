@@ -531,7 +531,7 @@ def test_real_fastmcp_v020_schemas_and_offset_rejection():
         register_all(mcp, lambda: ctx)
         async with Client(mcp) as client:
             tools = {t.name: t for t in await client.list_tools()}
-            assert len(tools) == 37 and "saved_roll_get" not in tools
+            assert len(tools) == 41 and "saved_roll_get" not in tools
             chat = tools["chat_read"].input_schema["properties"]
             assert set(chat) == {"limit", "cursor"}
             assert tools["token_add"].input_schema["properties"]["width"]["type"] == "integer"

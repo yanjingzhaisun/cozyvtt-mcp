@@ -2,6 +2,7 @@
 """CozyVTT MCP bridge (stdio): thread-safe lazy initialization, recovery, and cleanup."""
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import sys
@@ -36,24 +37,27 @@ async def lifespan(server):
             await asyncio.to_thread(ctx.close)
 
 
-mcp = FastMCP(
-    "cozyvtt",
-    lifespan=lifespan,
-    instructions=(
-        "Operate the configured CozyVTT campaign as the authenticated account; "
-        "upstream resource permissions apply to every tool. Discovery is offline; "
-        "the first business call lazily logs in. Upstream authentication allows "
-        "5 failed attempts per 15 minutes per IP on reviewed v1.4.0; "
-        "initialization and re-login failures "
-        "have a 180-second cooldown, extended when required by Retry-After. "
-        "Do not loop on authentication failures. Tool-body results use {ok,data?,error?}; "
-        "HTTP errors retain status/upstream diagnostics, while argument validation is "
-        "an MCP error. WS writes report pending, never a business ACK: inspect "
-        "events_poll and state before taking further action. Annotations describe "
-        "resource effects, not guaranteed delivery; document_read also caches binary "
-        "files locally. No tool performs game-rule calculations for the caller."
-    ),
-)
+def create_server(toolsets: str | None = None) -> FastMCP:
+    mcp = FastMCP(
+        "cozyvtt",
+        lifespan=lifespan,
+        instructions=(
+            "Operate the configured CozyVTT campaign as the authenticated account; "
+            "upstream resource permissions apply to every tool. Discovery is offline; "
+            "the first business call lazily logs in. Upstream authentication allows "
+            "5 failed attempts per 15 minutes per IP on reviewed v1.4.0; "
+            "initialization and re-login failures "
+            "have a 180-second cooldown, extended when required by Retry-After. "
+            "Do not loop on authentication failures. Tool-body results use {ok,data?,error?}; "
+            "HTTP errors retain status/upstream diagnostics, while argument validation is "
+            "an MCP error. WS writes report pending, never a business ACK: inspect "
+            "events_poll and state before taking further action. Annotations describe "
+            "resource effects, not guaranteed delivery; document_read also caches binary "
+            "files locally. No tool performs game-rule calculations for the caller."
+        ),
+    )
+    register_all(mcp, get_ctx, toolsets)
+    return mcp
 
 
 def get_ctx() -> Ctx:
@@ -91,10 +95,27 @@ def get_ctx() -> Ctx:
             raise RuntimeError(f"cozyvtt context initialization failed: {exc}") from exc
 
 
-register_all(mcp, get_ctx)
+# CLI selection is resolved before registration; imported servers honor the environment.
+mcp = create_server(os.environ.get("COZYVTT_MCP_TOOLSETS")) if __name__ != "__main__" else None
 
 
 def main() -> None:
+    from tools.toolsets import describe_toolsets, select_tools
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--toolsets", metavar="NAMES",
+                        help="Comma-separated presets; overrides COZYVTT_MCP_TOOLSETS (default: all)")
+    parser.add_argument("--list-toolsets", action="store_true",
+                        help="Print presets, tool counts, and the default, then exit")
+    args = parser.parse_args()
+    if args.list_toolsets:
+        print(describe_toolsets())
+        return
+    selection = args.toolsets if args.toolsets is not None else os.environ.get("COZYVTT_MCP_TOOLSETS")
+    try:
+        select_tools(selection)
+    except ValueError as exc:
+        parser.error(str(exc))
+    selected_mcp = create_server(selection)
     log_dir = Path(__file__).resolve().parent / "logs"
     log_dir.mkdir(exist_ok=True)
     logging.basicConfig(
@@ -103,7 +124,7 @@ def main() -> None:
         handlers=[logging.FileHandler(log_dir / "cozyvtt-mcp.log"), logging.StreamHandler(sys.stderr)],
     )
     log.info("Starting cozyvtt-mcp (stdio), target %s", os.environ.get("COZYVTT_URL", "<env not set>"))
-    mcp.run(show_banner=False)  # stdio startup needs neither a banner nor its online version check
+    selected_mcp.run(show_banner=False)  # stdio startup needs neither a banner nor its online version check
 
 
 if __name__ == "__main__":

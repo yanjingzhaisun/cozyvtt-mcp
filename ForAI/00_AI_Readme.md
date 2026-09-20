@@ -5,7 +5,7 @@ KEYWORD_CN: 虚拟桌面,模型上下文协议,智能体入口,任务路由
 
 # AI developer entry
 
-**Preserve the bridge contract before extending it.** cozyvtt-mcp is a Python FastMCP **stdio** bridge exposing **37 tools** for an AI DM/KP to operate one CozyVTT campaign. The current release is v0.3.0; read [pyproject.toml](../pyproject.toml) for package metadata and [README compatibility](../README.md#compatibility) for tested upstream baselines. The bridge transports server-authoritative rolls and state; it does not implement game-rule calculations.
+**Preserve the bridge contract before extending it.** cozyvtt-mcp is a Python FastMCP **stdio** bridge exposing **41 tools** for an AI DM/KP to operate one CozyVTT campaign. The current release is v0.4.0; read [pyproject.toml](../pyproject.toml) for package metadata and [README compatibility](../README.md#compatibility) for tested upstream baselines. The bridge transports server-authoritative rolls and state; it does not implement game-rule calculations.
 
 ## Start here
 
@@ -43,7 +43,7 @@ Paths are relative to the repository root, `/opt/data/projects/cozyvtt-mcp/` in 
 
 | Task | Read first, in order | Then inspect / completion rule |
 |---|---|---|
-| Add or change a tool | [Conventions P01–P03](Coding_Conventions.md#p01-ws-write-receipts), [SPEC tool inventory](../SPEC.md#4-tool-inventory-37-tools), relevant SPEC subsection, [P14](Coding_Conventions.md#p14-tool-change-documentation-workflow) | `tools/__init__.py`, the owning `tools/*.py` module, upstream route/handler, and `tests/test_contracts.py` or `tests/test_v020.py`; update contract, user feature list, and tests in the same commit |
+| Add or change a tool | [Conventions P01–P03](Coding_Conventions.md#p01-ws-write-receipts), [SPEC tool inventory](../SPEC.md#4-tool-inventory-41-tools), relevant SPEC subsection, [P14](Coding_Conventions.md#p14-tool-change-documentation-workflow) | `tools/__init__.py`, the owning `tools/*.py` module, upstream route/handler, and `tests/test_contracts.py` or `tests/test_v020.py`; update contract, user feature list, and tests in the same commit |
 | Adapt to a new CozyVTT release | [P16](Coding_Conventions.md#p16-upstream-release-adaptation), [P13](Coding_Conventions.md#p13-evidence-and-source-precedence), [SPEC fallback rules](../SPEC.md#5-fallback-and-error-rules), [local research sources](00_Index.md#local-research-and-authoring-sources) | Diff both upstream `backend/docs` snapshots before bridge edits, then inspect routes/middleware/validators/WS handlers; record unknowns and test both baselines |
 | Change authentication or WS behavior | [Conventions P04–P09](Coding_Conventions.md#p04-single-context-initialization-and-recovery), SPEC sections [1](../SPEC.md#1-authentication-and-rest-client) and [2](../SPEC.md#2-websocket-and-caches) | `server.py`, `auth.py`, `client.py`, `ws_listener.py`, `tools/__init__.py`; run lifecycle, cooldown, pagination, error, and reconnect regressions in `tests/test_server.py` and `tests/test_contracts.py` |
 | Prepare a release | [P15](Coding_Conventions.md#p15-release-documentation-and-compatibility), [CHANGELOG.md](../CHANGELOG.md), [README compatibility](../README.md#compatibility), `pyproject.toml`, `uv.lock` | Write the new Keep a Changelog version section before any tag; verify the tested baselines and metadata. Tag/push/release only within the task's explicit authorization |
@@ -61,4 +61,4 @@ This is a navigation checklist, not a second copy of the rules. Every change MUS
 
 For v0.3.0 metadata decisions, accuracy findings, and offline verification, see [TDQS_Quality_Report.md](TDQS_Quality_Report.md).
 
-Current baseline: 176 offline tests. Tool or behavior changes may legitimately change that count; never delete coverage merely to retain it. Commands, limits, and evidence reporting are defined once in P18.
+Current baseline: 228 offline tests. Tool or behavior changes may legitimately change that count; never delete coverage merely to retain it. Commands, limits, and evidence reporting are defined once in P18.

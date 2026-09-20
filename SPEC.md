@@ -1,10 +1,10 @@
-# cozyvtt-mcp — SPEC v2 (v0.3.0, 2026-09-21)
+# cozyvtt-mcp — SPEC v2 (v0.4.0, 2026-09-21)
 
 A Python FastMCP stdio bridge for CozyVTT, fixed to one campaign, allowing an AI DM/KP to read and write game state through the API. Dual baselines: CozyVTT **v1.2.2 / v1.4.0**. This specification describes bridge behavior; when upstream v1.4.0 documentation and source disagree, the source takes precedence. The adaptation follows the R1 report, `cozyvtt-v1.4.0-adaptation.md`, sections 3–8 and 11, and the R2 HUMAN DECISIONS.
 
 ## 0. Project conventions and compatibility
 
-- Version: 0.3.0; tools: **37**; no redundant `saved_roll_get`.
+- Version: 0.4.0; tools: **41**; no redundant `saved_roll_get`.
 - Python ≥3.11, FastMCP stdio, requests + python-socketio; dependencies managed with uv.
 - One `COZYVTT_CAMPAIGN_ID`; all campaign-specific tools use this campaign. Document asset scopes may explicitly specify campaign_id; CAMPAIGN defaults to the current campaign when omitted.
 - The bridge handles API protocols and state transfer only. The caller calculates CoC success levels, SAN loss, healing, and other rules. The character's own gameSystem determines the sheet schema; the campaign system must not be used to rewrite character data.
@@ -13,7 +13,7 @@ A Python FastMCP stdio bridge for CozyVTT, fixed to one campaign, allowing an AI
 | CozyVTT baseline | Supported scope | Verification boundary |
 |---|---|---|
 | v1.2.2 | Retain the original 20 tools; read only the latest chat page unless the response supplies nextCursor; degrade new REST features based on precise errors | Old snapshots and existing offline regressions |
-| v1.4.0 | 37 tools; Documents / Saved Rolls / DM transfer / Hit Dice / session history; cursor pagination | Source contracts + offline HTTP/WS mocks; no instance connection during this adaptation |
+| v1.4.0 | 41 tools; Documents / Saved Rolls / DM transfer / Hit Dice / session history; cursor pagination | Source contracts + offline HTTP/WS mocks; no instance connection during this adaptation |
 
 Do not infer the version from an arbitrary 404, an empty list, or a WS timeout. New API capabilities in `campaign_get.features` default to `unknown`. Hit Dice is false outside DND_5E and remains unknown in DND_5E: passing the system gate does not establish that the server implements the event.
 
@@ -32,6 +32,31 @@ effects, not identical success responses. Other writes conservatively avoid full
 idempotency promises. All tools may contact an external CozyVTT service. Shared auth
 limits are also disclosed in MCP initialize instructions, avoiding repetition in each
 tool. See [accuracy audit and evidence](ForAI/TDQS_Quality_Report.md).
+
+### 0.2 Tool sets (v0.4.0)
+
+`server.py --toolsets NAMES` selects comma-separated presets. If the flag is absent,
+read `COZYVTT_MCP_TOOLSETS`; if both are absent, use `all`. The flag replaces the env
+selection. Whitespace around names is ignored; names are case-sensitive. Presets use
+union semantics, duplicates are allowed, and `all` wins over other valid names.
+Empty strings, empty comma-separated entries, and unknown names exit non-zero with
+all valid names and tool counts, even when `all` is also present.
+
+| Preset | Tools | Selection |
+|---|---:|---|
+| `play` | 20 | `campaign_get`, `chat_read`, `chat_send`, `creature_search`, `dice_roll`, `events_poll`, `initiative_manage`, `initiative_read`, `map_create`, `map_delete`, `map_list`, `map_switch`, `session_list`, `session_manage`, `session_notes_update`, `token_add`, `token_delete`, `token_hp_update`, `token_move`, `token_place_creature` |
+| `docs` | 9 | All `document_*` tools plus `campaign_document_list` |
+| `roster` | 7 | All `character_*` tools |
+| `macros` | 4 | All `saved_roll_*` tools |
+| `admin` | 1 | `campaign_transfer_dm` |
+| `all` (default) | 41 | Every tool |
+
+Filtering occurs before FastMCP registration: excluded tools are absent from both the
+registry and `tools/list`. `--list-toolsets` prints every preset's count and tools,
+marks `all` as default, and exits 0 before registration or authentication; it takes
+precedence over selection validation. Discovery never initializes a campaign.
+The four new tools are additive; all 37 existing descriptions, input/output schemas,
+annotations, and names remain unchanged.
 
 ## 1. Authentication and REST client
 
@@ -67,7 +92,7 @@ tool. See [accuracy audit and evidence](ForAI/TDQS_Quality_Report.md).
 - Saved Rolls: 50 per user per campaign. Creation is serialized within this bridge; the server validates expressions and enforces the quota. Cross-client races remain possible; the bridge does not promise a hard database constraint.
 - character_update serializes read–merge–write within this process. Upstream has no If-Match or atomic patch, so concurrent browser saves may still overwrite data.
 
-## 4. Tool inventory (37 tools)
+## 4. Tool inventory (41 tools)
 
 Tool bodies return `{ok:bool,data?:any,error?:string}`. FastMCP handles argument schema validation errors. In the paths below, `{id}` is the current campaign_id.
 
@@ -110,6 +135,10 @@ Tool bodies return `{ok:bool,data?:any,error?:string}`. FastMCP handles argument
 | `character_hitdice_spend` | WS | character.hitdice.spend | character_id/index:int≥0; DND_5E only, pending, no rolling/healing |
 | `session_list` | REST | GET /api/campaigns/{id}/sessions | No parameters; at most 50 sessions, descending order, including active sessions |
 | `session_notes_update` | REST | PUT /api/campaigns/{id}/sessions/{sessionId}/notes | session_id/notes≤2000; DM, empty string clears notes |
+| `map_create` | REST | POST /api/campaigns/{id}/maps | name/image_url/width/height; grid_size:int≥1=50, spirit_layer_url:null/string; returns {map} |
+| `map_delete` | REST | DELETE /api/campaigns/{id}/maps/{mapId} | map_id; DM only, cannot delete current map; returns {message} |
+| `token_delete` | REST | DELETE /api/campaigns/{id}/maps/{mapId}/tokens/{tokenId} | map_id/token_id; DM only, removes token, not sheet; returns {message} |
+| `character_delete` | REST | DELETE /api/characters/{characterId} | character_id; owner only, deletes sheet itself; returns {message} |
 
 ### 4.1 System gates and capability status
 
@@ -159,6 +188,40 @@ Older instances without nextCursor allow only the latest page. Subsequent cursor
 - initiative_read(refresh=true) sends request_state and waits at most 2 seconds for a new event. A timeout means unknown state, not proof that combat has not started. refresh=false may return cached state marked stale.
 - session_manage end sends saveState/notes; pause/end first resolve activeSession.id. notes is limited to 2000 characters and visible to the whole campaign. Empty end notes do not clear existing content; session_notes_update clears notes when empty after trimming. Lists may include unfinished sessions; recap edits do not broadcast or end the session again.
 
+### 4.6 Map creation and resource deletion (v0.4.0)
+
+- `map_create` requires a nonblank name, a nonempty existing image asset ID/URL,
+  and positive integer width/height in grid units. It sends exactly
+  `{name,imageUrl,width,height,gridSize}` plus `spiritLayerUrl` when non-null;
+  grid_size defaults to 50 pixels per grid square. It neither uploads images nor
+  switches the current map. Upstream checks DM/image permissions, trims the name,
+  normalizes asset URLs, and creates empty tokens/annotations. Each success creates
+  another map; inspect state before retrying an uncertain result.
+- `map_delete` removes the map and its stored tokens/state. The server rejects the
+  current map with HTTP 400; use `map_switch` first. No automatic switch or cascade
+  of bridge calls is performed.
+- `token_delete` removes only the specified map token. It does not delete its linked
+  sheet, adjust HP, or manage initiative entries. `token_move` changes position;
+  `token_hp_update` adjusts sheet HP through WS and takes a **character ID**, not a
+  token ID. Both map/token deletion require DM authority upstream.
+- `character_delete` permanently deletes the sheet itself, not only its assignment;
+  the authenticated user must own it. DM authority alone is insufficient. Map tokens
+  remain. Use `character_update` to edit or `token_delete` to remove a placed token.
+- All four use REST only, pass through `{map}` or `{message}` inside `{ok:true,data}`,
+  and do not claim a WS broadcast receipt. Tool-body failures use `{ok:false,error}`
+  with HTTP status/upstream diagnostics; argument-schema failures are MCP errors.
+  Deletes have no undo tool; repeated deletion leaves the resource absent but can
+  return 404. Exact route-missing versus resource 404 handling remains unchanged.
+
+Evidence: CozyVTT **v1.4.0** `backend/docs/API_DOCUMENTATION.yaml:2932` (character
+DELETE), `:3740` (map POST), `:3876` (map DELETE), `:4071` (token DELETE).
+Source: `backend/src/routes/maps.ts:69` (creation/permissions/defaults), `:714`
+(current-map guard/deletion), `:1217` (token removal); `backend/src/routes/characters.ts:738`
+(owner-only deletion); `backend/prisma/schema.prisma:376` and `:450` (sheet and map
+storage/units). Source accepts extra map settings not documented in that POST schema;
+this wrapper exposes only the snapshot's six documented fields. Verification is
+source review and offline mocked transport, not a new live-instance test.
+
 ## 5. Fallback and error rules
 
 | Condition | Bridge error / behavior |
@@ -177,7 +240,7 @@ Do not permanently disable features after a business 404, infer missing capabili
 
 - Logs go to project logs/. Do not log uploaded content, PDF bytes, Cookies, passwords, or full authentication requests. Preserve business errors for diagnosis. Do not commit logs or downloads.
 - Primary verification: `.venv/bin/python -m pytest`. HTTP uses responses mocks; WS uses FakeSIO. Test fixtures block real TCP, including in the stdio subprocess.
-- Cover legacy contracts, 37-tool registration, chat cursor/offset rejection, multipart retries/raw/304, both Documents 404 categories, Saved Rolls, DM transfer, Hit Dice system gate/pending, new WS events/lost membership, session notes, unreliable character validation, token roles/sizes, map step results, and fresh initiative state.
+- Cover legacy contracts, 41-tool registration, chat cursor/offset rejection, multipart retries/raw/304, both Documents 404 categories, Saved Rolls, DM transfer, Hit Dice system gate/pending, new WS events/lost membership, session notes, unreliable character validation, token roles/sizes, map step results, and fresh initiative state.
 - No live smoke tests, config.yaml/MCP registration changes, or instance access during this adaptation. Existing scripts/smoke.py and smoke_write.py require separate authorization and are outside offline verification.
 - One local task commit; no push, tag, or release. Deliver source, README, SPEC, version metadata, and tests together.
 

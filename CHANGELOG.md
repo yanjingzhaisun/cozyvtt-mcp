@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versions follow semver.
 
+## [0.4.0] — 2026-09-21
+
+### Added
+
+- Optional `--toolsets` / `COZYVTT_MCP_TOOLSETS` presets: `play`, `docs`, `roster`, `macros`, `admin`, and default `all`. Comma-separated selections use union semantics; filtering happens at registration. `--list-toolsets` prints memberships and counts offline.
+- Four additive REST tools: `map_create`, `map_delete`, `token_delete`, and `character_delete` (37 → 41 tools). No existing tool name, description, input/output schema, or annotation changed; existing calls need no migration.
+- Offline preset/transport regressions and a portable tool-budget measurement script with interactive stdio probes. README tables record measured JSON bytes and estimated token savings.
+
+### Verified
+
+- 228 offline tests; stdio counts: default 41, play 20, docs 9. All 37 existing tool definitions compared unchanged. CozyVTT v1.4.0 endpoint contracts reviewed from the pinned API snapshot and source; no live campaign access or new live compatibility claim.
+
 ## [0.3.0] — 2026-09-21
 
 ### Added
@@ -78,6 +90,7 @@ CozyVTT v1.4.0 support. Dual baseline: v1.2.2 and v1.4.0. Adaptation driven by a
 - Auth discipline: `rememberMe` login, 10-min keepalive, ≥3-min re-login spacing, 429 exponential backoff.
 - WS listener with 500-event ring buffer, single reconnect worker, `events_poll` cursor semantics.
 
+[0.4.0]: https://github.com/yanjingzhaisun/cozyvtt-mcp/compare/tdqs-quality...toolsets-and-completeness
 [0.3.0]: https://github.com/yanjingzhaisun/cozyvtt-mcp/compare/v0.2.1...tdqs-quality
 [0.2.1]: https://github.com/yanjingzhaisun/cozyvtt-mcp/releases/tag/v0.2.1
 [0.2.0]: https://github.com/yanjingzhaisun/cozyvtt-mcp/releases/tag/v0.2.0

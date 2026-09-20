@@ -195,7 +195,11 @@ def wrap(fn):
     return inner
 
 
-def register_all(mcp, get_ctx) -> None:
+def register_all(mcp, get_ctx, toolsets: str | None = None) -> None:
+    from tools.toolsets import ToolsetRegistration, select_tools
+    selected = select_tools(toolsets)
+    if selected is not None:
+        mcp = ToolsetRegistration(mcp, selected)
     from tools import read_tools, write_tools, document_tools, campaign_tools
     read_tools.register(mcp, get_ctx)
     write_tools.register(mcp, get_ctx)

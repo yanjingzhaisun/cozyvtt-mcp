@@ -18,6 +18,52 @@ Defaults, routes, WS events, and result envelopes are unchanged. The current rel
 has offline regression coverage; the live results below remain historical evidence.
 [Accuracy audit](ForAI/TDQS_Quality_Report.md) records wording corrections and limits.
 
+## Tool sets
+
+**The default is all tools.** v0.4.0 adds optional registration-time filtering; excluded
+tools are absent from `tools/list`. Existing tool definitions are unchanged.
+Choose comma-separated presets (union); duplicates are accepted and `all` wins.
+The flag overrides `COZYVTT_MCP_TOOLSETS`. Empty values or unknown names fail with
+valid preset names and counts. `--list-toolsets` prints all memberships and the default,
+then exits successfully without connecting to CozyVTT.
+
+| Preset | Tools | Selection |
+|---|---:|---|
+| `play` | 20 | `campaign_get`, `chat_read`, `chat_send`, `creature_search`, `dice_roll`, `events_poll`, `initiative_manage`, `initiative_read`, `map_create`, `map_delete`, `map_list`, `map_switch`, `session_list`, `session_manage`, `session_notes_update`, `token_add`, `token_delete`, `token_hp_update`, `token_move`, `token_place_creature` |
+| `docs` | 9 | All `document_*` tools plus `campaign_document_list` |
+| `roster` | 7 | All `character_*` tools |
+| `macros` | 4 | All `saved_roll_*` tools |
+| `admin` | 1 | `campaign_transfer_dm` |
+| `all` (default) | 41 | Every tool |
+
+```sh
+.venv/bin/python server.py --toolsets play,macros
+COZYVTT_MCP_TOOLSETS=docs,roster .venv/bin/python server.py
+.venv/bin/python server.py --list-toolsets
+```
+
+For an MCP client, append `"--toolsets", "play"` to its server `args`, or set
+`COZYVTT_MCP_TOOLSETS` in its server `env`.
+
+Measured with `.venv/bin/python scripts/measure_tool_budget.py` (offline stdio).
+Bytes sum UTF-8 JSON tool definitions, excluding JSON-RPC envelope/list separators;
+tokens are estimates (`bytes // 4`), not tokenizer measurements.
+
+| Preset | JSON bytes | Estimated tokens | Savings vs all |
+|---|---:|---:|---:|
+| `play` | 30,925 | 7,731 | 48% |
+| `docs` | 13,418 | 3,354 | 77% |
+| `roster` | 9,152 | 2,288 | 85% |
+| `macros` | 4,664 | 1,166 | 92% |
+| `admin` | 1,199 | 299 | 98% |
+| `all` | 59,358 | 14,839 | 0% |
+
+v0.4.0 also adds `map_create`, `map_delete`, `token_delete`, and `character_delete`.
+Create maps from existing image assets; use `map_switch` before deleting the current
+map. `token_delete` removes a map token; `token_hp_update` changes sheet HP using a
+character ID. `character_delete` permanently deletes an owned sheet. No existing call
+needs migration; add `roster` or `docs` when a session needs those tools.
+
 ## Compatibility
 
 | cozyvtt-mcp | CozyVTT | Notes |
@@ -25,7 +71,7 @@ has offline regression coverage; the live results below remain historical eviden
 | **0.2.0** | **v1.2.2 / v1.4.0** | Dual baseline: retain original tools; new REST routes degrade explicitly on old instances. Offline contract tests 176/176; live v1.4.0 smoke (read/write + Documents/Saved Rolls round-trips) passed 2026-09-17. |
 | 0.1.1 | v1.2.2 | Previous 20-tool release |
 
-The compatibility table describes supported contracts, not an inferred server version. New feature availability is `unknown` until established; an empty list or a business 404 is not evidence that the route is missing. See [SPEC v2](SPEC.md) for the complete 37-tool contract.
+The compatibility table describes supported contracts, not an inferred server version. New feature availability is `unknown` until established; an empty list or a business 404 is not evidence that the route is missing. See [SPEC v2](SPEC.md) for the complete 41-tool contract.
 
 ## v0.2.0 changes and migration
 
@@ -40,14 +86,14 @@ REST route-missing 404 with the exact upstream message `The requested resource d
 
 ## Features
 
-37 tools returning `{ok, data?, error?}` for tool-body results. MCP argument validation remains handled by FastMCP:
+41 tools returning `{ok, data?, error?}` for tool-body results. MCP argument validation remains handled by FastMCP:
 
 - **Session/campaign**: `campaign_get` (role and owner reported separately; new capability keys may be `unknown`), `session_manage`, `session_list`, `session_notes_update`, `campaign_transfer_dm` (owner reclaim uses the same tool), `map_list`, `map_switch`
 - **Narration**: `chat_send` (DM / PLAYER), `chat_read`
 - **Dice**: `dice_roll` (server-authoritative results; `is_secret=true` (wire field: `secret`) delivers to the roller and DMs on v1.4.0), `events_poll` (recent buffered dice events, not durable history; DICE_ROLL events are absent from chat history)
-- **Tokens/maps**: `token_add`, `token_move`, `token_hp_update`, `token_place_creature`, `creature_search` (SRD + custom library)
+- **Tokens/maps**: `token_add`, `token_move`, `token_hp_update`, `token_place_creature`, `token_delete`, `map_create`, `map_delete`, `creature_search` (SRD + custom library)
 - **Combat**: `initiative_manage` (add / remove / **roll** / **set** / **reorder** / start / next / end), `initiative_read` (note: CoC7e initiative is DEX-ordered, no roll — this is upstream rules behavior, and `roll` is gated accordingly)
-- **Characters**: `character_list`, `character_get`, `character_create`, `character_validate`, `character_update` (rules math is done by the agent; the bridge just writes values)
+- **Characters**: `character_list`, `character_get`, `character_create`, `character_delete`, `character_validate`, `character_update` (rules math is done by the agent; the bridge just writes values)
 - **Documents**: `document_upload`, `document_create`, `document_list`, `campaign_document_list`, `document_read`, `document_update`, `document_share`, `document_unshare`, `document_delete`
 - **Saved Rolls**: `saved_roll_list`, `saved_roll_create`, `saved_roll_update`, `saved_roll_delete` (private to the current user and campaign; 50 macros per user/campaign, server-validated expressions)
 - **Hit Dice**: `character_hitdice_spend` (DND_5E only; dispatches one spend without rolling dice or healing)
@@ -72,7 +118,7 @@ MCP client (stdio)
       ├─ auth.py        — rememberMe login, 10-min keepalive, 3-min re-login spacing, 429 backoff
       ├─ client.py      — REST wrapper: one 401→re-login→retry, 429 exponential backoff (1/2/4s, ≤3)
       ├─ ws_listener.py — socket.io listener, 500-event ring buffer, one reconnect worker
-      └─ tools/         — 37 MCP tools (read/write, documents, campaign additions)
+      └─ tools/         — 41 MCP tools (read/write, documents, campaign additions)
 ```
 
 Design notes:
@@ -108,8 +154,8 @@ uv sync   # or: python -m venv .venv && .venv/bin/pip install fastmcp requests "
 ### Docker (stdio)
 
 ```bash
-docker build -t cozyvtt-mcp:0.3.0 .
-docker run --rm -i --env-file /path/to/cozyvtt.env cozyvtt-mcp:0.3.0
+docker build -t cozyvtt-mcp:0.4.0 .
+docker run --rm -i --env-file /path/to/cozyvtt.env cozyvtt-mcp:0.4.0
 ```
 
 Use `-i` to keep stdin open; MCP uses stdin/stdout, without a network port or TTY.
@@ -127,7 +173,7 @@ mainland China can use a mirror, which serves byte-identical files (the hashes s
 verify):
 
 ```bash
-docker build --build-arg WHEEL_BASE=https://mirrors.aliyun.com/pypi/packages -t cozyvtt-mcp:0.3.0 .
+docker build --build-arg WHEEL_BASE=https://mirrors.aliyun.com/pypi/packages -t cozyvtt-mcp:0.4.0 .
 ```
 
 `scripts/docker_requirements.py --wheel-base ""` keeps the lock file's own URLs.

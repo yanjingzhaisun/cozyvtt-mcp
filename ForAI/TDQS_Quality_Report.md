@@ -104,7 +104,7 @@ clarified: it copies name/image only and creates no character sheet or statistic
   `:629`. Recap replacement/trim: `routes/campaigns.ts:2012`, `:2024`; session-end
   empty-note behavior: `:2253`.
 - Additional scope, validation, and fallback contracts remain in
-  [SPEC](../SPEC.md#4-tool-inventory-37-tools) and the existing offline tests.
+  [SPEC](../SPEC.md#4-tool-inventory-41-tools) and the existing offline tests.
 
 ## Unresolved items and limits
 

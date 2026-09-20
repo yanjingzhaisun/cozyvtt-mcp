@@ -18,6 +18,51 @@ Defaults, routes, WS events, and result envelopes are unchanged. The current rel
 has offline regression coverage; the live results below remain historical evidence.
 [Accuracy audit](ForAI/TDQS_Quality_Report.md) records wording corrections and limits.
 
+## Tool sets（工具集）
+
+**默认加载全部工具（`all`）。** v0.4.0 支持在注册时筛选工具，未选工具不会出现在
+`tools/list` 中；已有工具定义保持不变。多个预设用逗号分隔并取并集，重复名称允许，
+包含 `all` 时加载全部工具。命令行参数优先于 `COZYVTT_MCP_TOOLSETS` 环境变量。
+空值或未知名称会以非零状态退出，并列出有效名称和工具数量。
+`--list-toolsets` 打印各预设的工具和默认项，然后成功退出，无需连接 CozyVTT。
+
+| Preset | Tools | Selection |
+|---|---:|---|
+| `play` | 20 | `campaign_get`, `chat_read`, `chat_send`, `creature_search`, `dice_roll`, `events_poll`, `initiative_manage`, `initiative_read`, `map_create`, `map_delete`, `map_list`, `map_switch`, `session_list`, `session_manage`, `session_notes_update`, `token_add`, `token_delete`, `token_hp_update`, `token_move`, `token_place_creature` |
+| `docs` | 9 | All `document_*` tools plus `campaign_document_list` |
+| `roster` | 7 | All `character_*` tools |
+| `macros` | 4 | All `saved_roll_*` tools |
+| `admin` | 1 | `campaign_transfer_dm` |
+| `all` (default) | 41 | Every tool |
+
+```sh
+.venv/bin/python server.py --toolsets play,macros
+COZYVTT_MCP_TOOLSETS=docs,roster .venv/bin/python server.py
+.venv/bin/python server.py --list-toolsets
+```
+
+MCP 客户端可在服务的 `args` 中追加 `"--toolsets", "play"`，或在 `env` 中设置
+`COZYVTT_MCP_TOOLSETS`。
+
+以下数据由 `.venv/bin/python scripts/measure_tool_budget.py` 离线 stdio 实测。
+字节数为各工具定义的 UTF-8 JSON 大小之和，不含 JSON-RPC 外层和列表分隔符；
+token 数按 `bytes // 4` 估算，并非 tokenizer 实测。
+
+| Preset | JSON bytes | Estimated tokens | Savings vs all |
+|---|---:|---:|---:|
+| `play` | 30,925 | 7,731 | 48% |
+| `docs` | 13,418 | 3,354 | 77% |
+| `roster` | 9,152 | 2,288 | 85% |
+| `macros` | 4,664 | 1,166 | 92% |
+| `admin` | 1,199 | 299 | 98% |
+| `all` | 59,358 | 14,839 | 0% |
+
+v0.4.0 新增 `map_create`、`map_delete`、`token_delete` 和 `character_delete`。
+地图创建使用已有图片资源；删除当前地图前须先用 `map_switch` 切换。
+`token_delete` 接受地图 token ID；`token_hp_update` 接受角色 ID 并调整角色卡 HP。
+`character_delete` 永久删除自己拥有的角色卡。已有调用无需迁移，需要角色或文档工具时
+可追加 `roster` 或 `docs`。
+
 ## 兼容性
 
 | cozyvtt-mcp | CozyVTT | 说明 |
@@ -25,7 +70,7 @@ has offline regression coverage; the live results below remain historical eviden
 | **0.2.0** | **v1.2.2 / v1.4.0** | 双基线：保留原有工具；新 REST 路由在旧实例上明确降级报错。离线契约测试 176/176；v1.4.0 真实实例冒烟（读写＋Documents/Saved Rolls 往返）2026-09-17 通过。 |
 | 0.1.1 | v1.2.2 | 上一版，20 个工具 |
 
-兼容表描述的是已支持的契约，不是推断的服务器版本。新功能在确认可用前一律报告 `unknown`；空列表或业务 404 不能作为路由不存在的证据。完整 37 工具契约见 [SPEC v2](SPEC.md)。
+兼容表描述的是已支持的契约，不是推断的服务器版本。新功能在确认可用前一律报告 `unknown`；空列表或业务 404 不能作为路由不存在的证据。完整 41 工具契约见 [SPEC v2](SPEC.md)。
 
 ## v0.2.0 变更与迁移
 
@@ -40,14 +85,14 @@ REST 路由缺失型 404（上游原文 `The requested resource does not exist`�
 
 ## 功能
 
-37 个工具，工具体结果统一返回 `{ok, data?, error?}`；参数校验由 FastMCP 处理：
+41 个工具，工具体结果统一返回 `{ok, data?, error?}`；参数校验由 FastMCP 处理：
 
 - **场次/战役**：`campaign_get`（role 与 owner 分开报告；新能力键可为 `unknown`）、`session_manage`、`session_list`、`session_notes_update`、`campaign_transfer_dm`（owner 收回也走它）、`map_list`、`map_switch`
 - **叙事**：`chat_send`（DM / PLAYER）、`chat_read`
 - **Dice**: `dice_roll` (server-authoritative; `is_secret=true` maps to `secret` and delivers to the roller and DMs on v1.4.0), `events_poll` (recent buffered events, not durable history; DICE_ROLL events are absent from chat history)
-- **Token/地图**：`token_add`、`token_move`、`token_hp_update`、`token_place_creature`、`creature_search`（SRD＋自定义怪库）
+- **Token/地图**：`token_add`、`token_move`、`token_hp_update`、`token_place_creature`、`token_delete`、`map_create`、`map_delete`、`creature_search`（SRD＋自定义怪库）
 - **战斗**：`initiative_manage`（add / remove / **roll** / **set** / **reorder** / start / next / end）、`initiative_read`（注意：CoC7e 先攻按 DEX 排序不骰——这是上游规则行为，`roll` 已相应门控）
-- **角色**：`character_list`、`character_get`、`character_create`、`character_validate`、`character_update`（规则数值由 agent 计算，桥只负责写值）
+- **角色**：`character_list`、`character_get`、`character_create`、`character_delete`、`character_validate`、`character_update`（规则数值由 agent 计算，桥只负责写值）
 - **文档**：`document_upload`、`document_create`、`document_list`、`campaign_document_list`、`document_read`、`document_update`、`document_share`、`document_unshare`、`document_delete`
 - **Saved Rolls**：`saved_roll_list`、`saved_roll_create`、`saved_roll_update`、`saved_roll_delete`（按用户×战役私有；每用户每战役 50 条，表达式服务器校验）
 - **Hit Dice**：`character_hitdice_spend`（仅 DND_5E；只扣一次，不骰骰子不加血）
@@ -72,7 +117,7 @@ MCP client (stdio)
       ├─ auth.py        — rememberMe login, 10-min keepalive, 3-min re-login spacing, 429 backoff
       ├─ client.py      — REST wrapper: one 401→re-login→retry, 429 exponential backoff (1/2/4s, ≤3)
       ├─ ws_listener.py — socket.io listener, 500-event ring buffer, one reconnect worker
-      └─ tools/         — 37 MCP tools (read/write, documents, campaign additions)
+      └─ tools/         — 41 MCP tools (read/write, documents, campaign additions)
 ```
 
 设计要点：
@@ -108,8 +153,8 @@ uv sync   # 或: python -m venv .venv && .venv/bin/pip install fastmcp requests 
 ### Docker (stdio)
 
 ```bash
-docker build -t cozyvtt-mcp:0.3.0 .
-docker run --rm -i --env-file /path/to/cozyvtt.env cozyvtt-mcp:0.3.0
+docker build -t cozyvtt-mcp:0.4.0 .
+docker run --rm -i --env-file /path/to/cozyvtt.env cozyvtt-mcp:0.4.0
 ```
 
 Use `-i` to keep stdin open; MCP uses stdin/stdout, without a network port or TTY.
