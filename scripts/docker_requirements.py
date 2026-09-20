@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections import deque
 from pathlib import Path
+import argparse
+import re
 import sys
 import tomllib
 
@@ -21,8 +23,29 @@ except ImportError:
     from pip._vendor.packaging.tags import sys_tags
     from pip._vendor.packaging.utils import parse_wheel_filename
 
+# uv.lock records the index that produced it, which may be a regional mirror
+# (e.g. mirrors.aliyun.com/pypi/packages/...). Mirrors serve byte-identical blobs, so the
+# recorded sha256 stays valid when the base changes — pip's --require-hashes verifies it.
+# Default to the canonical CDN so builds outside the maintainer's network work; pass
+# --wheel-base https://mirrors.aliyun.com/pypi/packages for faster builds from mainland China.
+CANONICAL_BASE = "https://files.pythonhosted.org/packages"
 
-def requirements(lock_path: Path) -> list[str]:
+
+def canonical_url(url: str, base: str) -> str:
+    """Rewrite a wheel URL onto `base`, keeping the blob path. "" keeps the lock URL."""
+    if not base:
+        return url
+    match = re.match(r"https?://[^?]+(/packages/.+)$", url)
+    if not match:
+        return url
+    path = match.group(1)
+    base = base.rstrip("/")
+    if base.endswith("/packages"):
+        path = path[len("/packages"):]
+    return f"{base}{path}"
+
+
+def requirements(lock_path: Path, wheel_base: str = CANONICAL_BASE) -> list[str]:
     with lock_path.open('rb') as stream:
         packages = tomllib.load(stream)['package']
     # This lock has one version per name. Fail closed if a future lock branches.
@@ -65,10 +88,15 @@ def requirements(lock_path: Path) -> list[str]:
         _, url, digest = min(candidates)
         if not digest.startswith('sha256:'):
             raise ValueError(f'Expected SHA-256 for {name}')
-        result.append(f'{name} @ {url} --hash={digest}')
+        result.append(f'{name} @ {canonical_url(url, wheel_base)} --hash={digest}')
     return result
 
 
 if __name__ == '__main__':
-    lock = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / 'uv.lock'
-    print('\n'.join(requirements(lock)))
+    parser = argparse.ArgumentParser(description='Emit locked runtime wheel URLs for the current platform.')
+    parser.add_argument('lock', nargs='?', default=None, help='path to uv.lock (default: repo root)')
+    parser.add_argument('--wheel-base', default=CANONICAL_BASE,
+                        help=f'base URL serving the blobs, or "" to keep the lock URL (default: {CANONICAL_BASE})')
+    options = parser.parse_args()
+    lock_path = Path(options.lock) if options.lock else Path(__file__).resolve().parent.parent / 'uv.lock'
+    print('\n'.join(requirements(lock_path, options.wheel_base)))

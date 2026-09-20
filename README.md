@@ -117,7 +117,18 @@ package install or dependency re-resolution is performed. Credentials are suppli
 at runtime. Without any COZYVTT variables, `initialize` and `tools/list` still work;
 only business tool calls initialize authentication. Mount upload files inside the
 container and pass those container paths to `document_upload`. Mount `/app/downloads`
-if binary downloads must survive container removal. No Docker build was run locally.
+if binary downloads must survive container removal.
+
+Wheel URLs come from the lock as direct links with `sha256` hashes, so only the host
+serving those blobs is configurable. The default is the canonical CDN; builders in
+mainland China can use a mirror, which serves byte-identical files (the hashes still
+verify):
+
+```bash
+docker build --build-arg WHEEL_BASE=https://mirrors.aliyun.com/pypi/packages -t cozyvtt-mcp:0.3.0 .
+```
+
+`scripts/docker_requirements.py --wheel-base ""` keeps the lock file's own URLs.
 
 ## Configuration
 
