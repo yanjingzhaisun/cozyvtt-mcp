@@ -1,5 +1,7 @@
 # cozyvtt-mcp
 
+[![cozyvtt-mcp MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/yanjingzhaisun/cozyvtt-mcp/badges/card.svg)](https://glama.ai/mcp/servers/yanjingzhaisun/cozyvtt-mcp)
+
 [English](README.md) | **中文**
 
 [CozyVTT](https://github.com/CheekyChinchilla/CozyVTT)（自托管、开源的虚拟跑团桌）的 MCP（Model Context Protocol）桥。让 AI agent 以 **DM/KP** 身份加入战役：聊天叙事、服务器公证骰、移动 token、切地图、管先攻、结算角色卡。

@@ -1,5 +1,7 @@
 # cozyvtt-mcp
 
+[![cozyvtt-mcp MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/yanjingzhaisun/cozyvtt-mcp/badges/card.svg)](https://glama.ai/mcp/servers/yanjingzhaisun/cozyvtt-mcp)
+
 **English** | [中文](README.zh-CN.md)
 
 MCP (Model Context Protocol) bridge for [CozyVTT](https://github.com/CheekyChinchilla/CozyVTT) — the self-hosted, open-source virtual tabletop. It lets an AI agent join a campaign as **DM/KP**: narrate over chat, roll server-authoritative dice on the server, move tokens, switch maps, manage initiative, and settle character sheets.
