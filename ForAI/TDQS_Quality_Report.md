@@ -110,10 +110,15 @@ clarified: it copies name/image only and creates no character sheet or statistic
 
 - Glama has not re-evaluated this branch. The six dimensions were reviewed locally;
   the requested >=4/5 cannot be certified by schema coverage or text length alone.
-- No Docker daemon is available. Dockerfile syntax, input allowlist, dependency
-  closure, and local equivalent startup were checked; image builds, locked-wheel
-  URL availability, and other platform architectures require external verification.
-  Missing compatible wheels fail closed rather than resolving unlocked packages.
+- No Docker daemon is available in the development container. Dockerfile syntax, input
+  allowlist, dependency closure, and local equivalent startup were checked there.
+  **Separately verified after tagging:** the image builds on a host with Docker (`28.5.2`,
+  x86_64, `--build-arg WHEEL_BASE=<mirror>`) and boots with no environment variables —
+  `initialize` succeeds, `tools/list` returns 37 tools, every parameter carries a
+  description, annotations are emitted in protocol form (`readOnlyHint` etc.), and stdin
+  EOF exits 0. The dependency layer was also reproduced in a clean Python 3.12 venv with
+  `--no-index --no-deps --only-binary=:all: --require-hashes` from both the canonical CDN
+  and a mirror: 78/78 wheels install. Other architectures remain unverified.
 - No campaign was contacted. Older-server role details, secret recipients, and
   behavior of optional WS events remain unverified; no version probe or ACK was
   fabricated. Permission/privacy claims need separately authorized live tests to

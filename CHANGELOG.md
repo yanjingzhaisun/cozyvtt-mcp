@@ -28,7 +28,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ### Verified
 
-- 176 offline tests; parameter descriptions 90/90 and annotations 37/37. No live campaign access or Docker build in this verification; no new Glama score is claimed.
+- 176 offline tests; parameter descriptions 90/90 and annotations 37/37. The `Dockerfile` was also built and booted on x86_64 (`docker 28.5.2`): the 220 MB image answers `initialize` and lists 37 tools with no environment variables set and no CozyVTT instance reachable. No live campaign access; no new Glama score is claimed.
 
 ## [0.2.1] — 2026-09-17
 
