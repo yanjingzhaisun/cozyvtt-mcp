@@ -1,0 +1,10 @@
+Status update: **cozyvtt-mcp [v0.3.0](https://github.com/yanjingzhaisun/cozyvtt-mcp/releases/tag/v0.3.0)** is out, and the bridge is now listed in the Glama MCP directory — https://glama.ai/mcp/servers/yanjingzhaisun/cozyvtt-mcp (submitted to `punkpeye/awesome-mcp-servers` as well, PR #14558).
+
+Relevant to this thread, since we agreed the bridge would live outside CozyVTT and version-pin against your releases:
+
+- **Glama independently re-checked our tool definitions**: all 37 tools now rate A on their quality rubric (previously B on the 20-tool v1.4.0 surface). Their public badge image updates on a slower batch, so the score page is the live view.
+- What the rating improved, in case it is useful as a checklist for anything you expose to agents: complete per-parameter JSON-Schema descriptions, and MCP annotations (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`) so a client can tell a read from a campaign-mutating write without guessing. Their rubric penalises descriptions that merely restate the schema, which is why the parameter text lives in the schema itself.
+- **Container support** so self-hosters can run the bridge without a Python toolchain: `Dockerfile` with hash-locked wheels (`pip --require-hashes`), `python:3.12-slim` base. Verified by a real image build plus a smoke test inside the container: `initialize` + `tools/list` with an empty environment returns all 37 tools and exits 0. Nothing in it touches your code — it is a client of your REST/WS API.
+- **Breaking, but only for our own API** (no impact on CozyVTT): three tools renamed for consistency — `campaign_status` → `campaign_get`, `initiative_state` → `initiative_read`, `token_hp` → `token_hp_update`. Documented in the changelog's `Self-hosters` section.
+
+Nothing needed from your side. The four findings from the v1.4.0 source review are still open with workarounds on our end (#69 validate endpoint, #70 REST token permissions, #71 WS re-auth room leak, #72 docs/ops mismatches), and the dual baseline (v1.2.2 + v1.4.0) is unchanged.
